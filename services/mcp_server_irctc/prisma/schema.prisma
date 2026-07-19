@@ -1,0 +1,224 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum BookingStatus {
+  PENDING
+  BOOKED
+  RAC
+  WL
+  CANCELLED
+  FAILED
+}
+
+enum ReminderType {
+  JOURNEY
+  PNR
+  BOOKING
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  name        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessions    IrctcSession[]
+  bookings    Booking[]
+  reminders   Reminder[]
+  passengers  Passenger[]
+  pnrTracking PnrTracking[]
+}
+
+model IrctcSession {
+  id                String    @id @default(uuid())
+  userId            String
+  irctcUsername     String
+  cookies           Json
+  localStorage      Json?
+  sessionStorage    Json?
+  expiresAt         DateTime?
+  isLoggedIn        Boolean   @default(true)
+  lastUsedAt        DateTime  @default(now())
+  deviceFingerprint String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([irctcUsername])
+}
+
+model Booking {
+  id             String        @id @default(uuid())
+  userId         String
+  pnr            String?       @unique
+  transactionId  String?
+  trainNumber    String
+  trainName      String
+  source         String
+  destination    String
+  journeyDate    DateTime
+  travelClass    String
+  quota          String
+  status         BookingStatus
+  fare           Decimal       @db.Decimal(10, 2)
+  passengerCount Int
+  bookedAt       DateTime?
+  cancelledAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  passengers BookingPassenger[]
+  reminders  Reminder[]
+
+  @@index([userId])
+  @@index([pnr])
+  @@index([journeyDate])
+}
+
+model BookingPassenger {
+  id              String  @id @default(uuid())
+  bookingId       String
+  name            String
+  age             Int
+  gender          Gender
+  berthPreference String?
+  coach           String?
+  seat            String?
+  currentStatus   String?
+  finalStatus     String?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+}
+
+model Passenger {
+  id              String   @id @default(uuid())
+  userId          String
+  name            String
+  age             Int
+  gender          Gender
+  berthPreference String?
+  seniorCitizen   Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PnrTracking {
+  id         String   @id @default(uuid())
+  userId     String
+  pnr        String
+  lastStatus Json
+  checkedAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pnr])
+  @@index([userId])
+}
+
+model Reminder {
+  id         String       @id @default(uuid())
+  userId     String
+  bookingId  String?
+  type       ReminderType
+  reminderAt DateTime
+  sent       Boolean      @default(false)
+  metadata   Json?
+  createdAt  DateTime     @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([bookingId])
+}
+
+// ─── IRCTC Data Models ───────────────────────────────────────────────────────
+
+model Station {
+  code String @id
+  name String
+  city String
+  state String
+  zone String
+  lat  Float?
+  lng  Float?
+
+  stops TrainScheduleStop[]
+}
+
+model Train {
+  number   String @id
+  name     String
+  type     String
+  runsDays String
+  classes  String
+  quotas   String
+
+  stops TrainScheduleStop[]
+}
+
+model TrainScheduleStop {
+  id                 String  @id @default(uuid())
+  trainNumber        String
+  stationCode        String
+  stationName        String
+  arrivalTime        String?
+  departureTime      String?
+  dayOffset          Int     @default(0)
+  stopNumber         Int
+  distanceFromOrigin Int     @default(0)
+
+  train   Train   @relation(fields: [trainNumber], references: [number], onDelete: Cascade)
+  station Station @relation(fields: [stationCode], references: [code], onDelete: Cascade)
+
+  @@unique([trainNumber, stationCode])
+  @@index([trainNumber])
+  @@index([stationCode])
+}
+
+model ToolExecution {
+  id         String   @id @default(uuid())
+  toolName   String
+  userId     String?
+  requestId  String?
+  sessionId  String?
+  input      Json
+  output     Json?
+  success    Boolean
+  statusCode Int?
+  error      String?
+  durationMs Int
+  createdAt  DateTime @default(now())
+
+  @@index([toolName])
+  @@index([userId])
+  @@index([createdAt])
+}
