@@ -1,54 +1,59 @@
 services:
-  postgres:
-    image: postgres:16
-    container_name: irctc_postgres
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER: irctc_user
-      POSTGRES_PASSWORD: irctc_pass_2024
-      POSTGRES_DB: irctc_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U irctc_user -d irctc_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    postgres:
+        image: postgres:16
+        container_name: irctc_postgres
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+            POSTGRES_DB: ${POSTGRES_DB}
+        ports:
+            - "5433:5432" # Moved host port from 5432 -> 5433
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: irctc_pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@irctc.local
-      PGADMIN_DEFAULT_PASSWORD: irctc_pass_2024
-    ports:
-      - "5050:80"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
+    pgadmin:
+        image: dpage/pgadmin4:latest
+        container_name: irctc_pgadmin
+        restart: unless-stopped
+        environment:
+            PGADMIN_DEFAULT_EMAIL: admin@irctc.local
+            PGADMIN_DEFAULT_PASSWORD: ${POSTGRES_PASSWORD}
+        ports:
+            - "5050:80"
+        depends_on:
+            postgres:
+                condition: service_healthy
+        volumes:
+            - pgadmin_data:/var/lib/pgadmin
 
-  redis:
-    image: redis:7-alpine
-    container_name: irctc_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    redis:
+        image: redis:7-alpine
+        container_name: irctc_redis
+        restart: unless-stopped
+        ports:
+            - "6379:6379"
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
 
 volumes:
-  postgres_data:
-  pgadmin_data:
-  redis_data:
+    postgres_data:
+    pgadmin_data:
+    redis_data:
+    app_data:

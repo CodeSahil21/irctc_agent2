@@ -1,55 +1,60 @@
 services:
-  postgres:
-    image: postgres:16
-    container_name: auth_postgres
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER: auth_user
-      POSTGRES_PASSWORD: auth_pass_2024
-      POSTGRES_DB: auth_db
-    ports:
-      - "5434:5432"
-    volumes:
-      - auth_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U auth_user -d auth_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    postgres:
+        image: postgres:16
+        container_name: auth_postgres
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+            POSTGRES_DB: ${POSTGRES_DB}
+        ports:
+            - "5434:5432"
+        volumes:
+            - auth_postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: auth_pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@auth.local
-      PGADMIN_DEFAULT_PASSWORD: auth_pass_2024
-    ports:
-      - "5051:80"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - auth_pgadmin_data:/var/lib/pgadmin
+    pgadmin:
+        image: dpage/pgadmin4:latest
+        container_name: auth_pgadmin
+        restart: unless-stopped
+        environment:
+            PGADMIN_DEFAULT_EMAIL: admin@auth.local
+            PGADMIN_DEFAULT_PASSWORD: ${POSTGRES_PASSWORD}
+        ports:
+            - "5051:80"
+        depends_on:
+            postgres:
+                condition: service_healthy
+        volumes:
+            - auth_pgadmin_data:/var/lib/pgadmin
 
-  redis:
-    image: redis:7-alpine
-    container_name: auth_redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    ports:
-      - "6380:6379"
-    volumes:
-      - auth_redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    redis:
+        image: redis:7-alpine
+        container_name: auth_redis
+        restart: unless-stopped
+        command: redis-server --appendonly yes
+        ports:
+            - "6380:6379"
+        volumes:
+            - auth_redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
 
 volumes:
-  auth_postgres_data:
-  auth_pgadmin_data:
-  auth_redis_data:
+    auth_postgres_data:
+    auth_pgadmin_data:
+    auth_redis_data:
+    auth_app_data:

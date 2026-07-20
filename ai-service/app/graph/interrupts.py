@@ -1,0 +1,1 @@
+HUMAN_APPROVAL_NODES = {"book_ticket", "cancel_ticket", "update_boarding_point", "delete_reminder"}
