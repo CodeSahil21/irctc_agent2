@@ -1,7 +1,14 @@
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+import "dotenv/config";
 
-const prisma = new PrismaClient({});
+// Initialize the driver adapter with your DB connection string from .env
+const adapter = new PrismaPg({
+    connectionString: process.env.DATABASE_URL,
+});
 
+// Pass the adapter to PrismaClient
+const prisma = new PrismaClient({ adapter });
 const stations = [
     {
         code: "NDLS",
