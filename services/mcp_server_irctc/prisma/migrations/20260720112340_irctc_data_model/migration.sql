@@ -159,47 +159,6 @@ CREATE TABLE "TrainScheduleStop" (
 );
 
 -- CreateTable
-CREATE TABLE "TrainSearchCache" (
-    "id" TEXT NOT NULL,
-    "fromStation" TEXT NOT NULL,
-    "toStation" TEXT NOT NULL,
-    "journeyDate" TIMESTAMP(3) NOT NULL,
-    "response" JSONB NOT NULL,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "TrainSearchCache_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "AvailabilityCache" (
-    "id" TEXT NOT NULL,
-    "trainNumber" TEXT NOT NULL,
-    "travelClass" TEXT NOT NULL,
-    "quota" TEXT NOT NULL,
-    "journeyDate" TIMESTAMP(3) NOT NULL,
-    "response" JSONB NOT NULL,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "AvailabilityCache_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "FareCache" (
-    "id" TEXT NOT NULL,
-    "trainNumber" TEXT NOT NULL,
-    "travelClass" TEXT NOT NULL,
-    "quota" TEXT NOT NULL,
-    "fromStation" TEXT NOT NULL,
-    "toStation" TEXT NOT NULL,
-    "response" JSONB NOT NULL,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "FareCache_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "ToolExecution" (
     "id" TEXT NOT NULL,
     "toolName" TEXT NOT NULL,
@@ -264,15 +223,6 @@ CREATE INDEX "TrainScheduleStop_stationCode_idx" ON "TrainScheduleStop"("station
 
 -- CreateIndex
 CREATE UNIQUE INDEX "TrainScheduleStop_trainNumber_stationCode_key" ON "TrainScheduleStop"("trainNumber", "stationCode");
-
--- CreateIndex
-CREATE UNIQUE INDEX "TrainSearchCache_fromStation_toStation_journeyDate_key" ON "TrainSearchCache"("fromStation", "toStation", "journeyDate");
-
--- CreateIndex
-CREATE UNIQUE INDEX "AvailabilityCache_trainNumber_travelClass_quota_journeyDate_key" ON "AvailabilityCache"("trainNumber", "travelClass", "quota", "journeyDate");
-
--- CreateIndex
-CREATE UNIQUE INDEX "FareCache_trainNumber_fromStation_toStation_travelClass_quo_key" ON "FareCache"("trainNumber", "fromStation", "toStation", "travelClass", "quota");
 
 -- CreateIndex
 CREATE INDEX "ToolExecution_toolName_idx" ON "ToolExecution"("toolName");
