@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "IBM Plex Mono", ui-monospace, monospace;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: #0a0e1a;
+  background-image:
+    radial-gradient(circle at 15% -10%, rgba(242, 169, 59, 0.08), transparent 40%),
+    linear-gradient(rgba(232, 236, 244, 0.03) 1px, transparent 1px);
+  background-size: auto, 100% 42px;
+  font-family: var(--font-body);
+  color: #e8ecf4;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #26314a;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*:focus-visible {
+  outline: 2px solid #f2a93b;
+  outline-offset: 2px;
+}
