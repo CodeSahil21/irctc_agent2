@@ -16,6 +16,7 @@ export async function bookTicketTool(params: BookTicketParams) {
         travelClass,
         quota,
     } = params;
+
     const dbUser = await upsertUser(user.email, user.name);
 
     const booking = await createBooking({
@@ -31,18 +32,48 @@ export async function bookTicketTool(params: BookTicketParams) {
         passengerCount: passengers.length,
     });
 
+    // Assign deterministic coach/seat to each passenger
     await prisma.bookingPassenger.createMany({
-        data: passengers.map((p) => ({
+        data: passengers.map((p, i) => ({
             bookingId: booking.id,
             name: p.name,
             age: p.age,
             gender: p.gender,
-            berthPreference: p.berthPreference,
+            berthPreference: p.berthPreference ?? null,
+            coach: `${travelClass}1`,
+            seat: String(i + 1),
+            currentStatus: "CNF",
+            finalStatus: "CNF",
         })),
     });
 
-    return prisma.booking.findUnique({
+    const result = await prisma.booking.findUnique({
         where: { id: booking.id },
         include: { passengers: true },
     });
+
+    return {
+        pnr: result!.pnr,
+        status: result!.status,
+        bookedAt: result!.bookedAt,
+        trainNumber: result!.trainNumber,
+        trainName: result!.trainName,
+        source: result!.source,
+        destination: result!.destination,
+        journeyDate: result!.journeyDate,
+        travelClass: result!.travelClass,
+        quota: result!.quota,
+        fare: result!.fare,
+        passengerCount: result!.passengerCount,
+        passengers: result!.passengers.map((p) => ({
+            name: p.name,
+            age: p.age,
+            gender: p.gender,
+            berthPreference: p.berthPreference,
+            coach: p.coach,
+            seat: p.seat,
+            currentStatus: p.currentStatus,
+            finalStatus: p.finalStatus,
+        })),
+    };
 }

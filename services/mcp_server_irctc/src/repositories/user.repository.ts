@@ -3,7 +3,7 @@ import { prisma } from "../prisma";
 export async function upsertUser(email: string, name?: string) {
     return prisma.user.upsert({
         where: { email },
-        update: { name },
+        update: { ...(name && { name }) }, // only update name if provided
         create: { email, name },
     });
 }

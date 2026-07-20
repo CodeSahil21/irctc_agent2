@@ -1,6 +1,11 @@
 import { BookingStatus } from "@prisma/client";
 import { prisma } from "../prisma";
 
+function generatePnr(): string {
+    // PNR format: 10-digit numeric string like real IRCTC PNRs
+    return Math.floor(1000000000 + Math.random() * 9000000000).toString();
+}
+
 export async function createBooking(data: {
     userId: string;
     trainNumber: string;
@@ -14,6 +19,11 @@ export async function createBooking(data: {
     passengerCount: number;
 }) {
     return prisma.booking.create({
-        data: { ...data, status: BookingStatus.PENDING },
+        data: {
+            ...data,
+            pnr: generatePnr(),
+            status: BookingStatus.BOOKED,
+            bookedAt: new Date(),
+        },
     });
 }

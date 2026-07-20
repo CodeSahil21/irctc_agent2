@@ -1,6 +1,13 @@
 import Redis from "ioredis";
 
-const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
+const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", {
+  lazyConnect: true,
+  enableOfflineQueue: false,
+  maxRetriesPerRequest: 0,
+});
+
+// Prevent unhandled 'error' event from crashing the process
+redis.on("error", () => { /* Redis unavailable — cache disabled, non-fatal */ });
 
 // TTLs in seconds
 const TTL = {
@@ -10,12 +17,20 @@ const TTL = {
 };
 
 async function get<T>(key: string): Promise<T | null> {
-  const val = await redis.get(key);
-  return val ? (JSON.parse(val) as T) : null;
+  try {
+    const val = await redis.get(key);
+    return val ? (JSON.parse(val) as T) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function set(key: string, value: unknown, ttl: number): Promise<void> {
-  await redis.set(key, JSON.stringify(value), "EX", ttl);
+  try {
+    await redis.set(key, JSON.stringify(value), "EX", ttl);
+  } catch {
+    // cache write failure is non-fatal
+  }
 }
 
 // ── Train search ──────────────────────────────────────────────────────────────

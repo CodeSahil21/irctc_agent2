@@ -2,7 +2,6 @@ import "dotenv/config";
 import express from "express";
 import cookieParser from "cookie-parser";
 import authRoutes from "./routes/auth.routes";
-import { csrfProtect, generateToken } from "./middleware/csrf";
 
 const required = ["ACCESS_TOKEN_SECRET", "REFRESH_TOKEN_SECRET", "DATABASE_URL"];
 for (const key of required) {
@@ -14,12 +13,6 @@ const PORT = parseInt(process.env.PORT ?? "4000", 10);
 
 app.use(express.json());
 app.use(cookieParser());
-app.use(csrfProtect); // must be after json() and cookieParser()
-
-// CSRF token endpoint — clients call this first to get a token
-app.get("/csrf-token", (req, res) => {
-  res.json({ csrfToken: generateToken(req, res) });
-});
 
 // Routes
 app.use("/auth", authRoutes);
