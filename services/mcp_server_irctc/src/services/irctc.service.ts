@@ -308,14 +308,11 @@ export async function fetchBoardingPointsFromIrctc(
             `Station ${from} not found on train ${trainNumber}`,
         );
 
-    // Boarding points = stops within 150km before the from station
+    // Return all usable boarding points on the train.
     const stops = await prisma.trainScheduleStop.findMany({
         where: {
             trainNumber,
-            distanceFromOrigin: {
-                gte: Math.max(0, fromStop.distanceFromOrigin - 150),
-                lte: fromStop.distanceFromOrigin,
-            },
+            departureTime: { not: null },
         },
         orderBy: { stopNumber: "asc" },
         include: { station: true },
@@ -329,7 +326,7 @@ export async function fetchBoardingPointsFromIrctc(
             stationName: s.station.name,
             departure: s.departureTime,
             day: s.dayOffset + 1,
-            distance: fromStop.distanceFromOrigin - s.distanceFromOrigin,
+            distance: s.distanceFromOrigin,
         })),
     };
 }
