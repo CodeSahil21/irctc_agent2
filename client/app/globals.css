@@ -1,77 +1,129 @@
 @import "tailwindcss";
 
+html,
+body {
+    width: 100%;
+    min-height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+}
+
 @theme {
-  /* Core palette */
-  --color-rail-bg: #080c18;
-  --color-rail-surface: #0d1424;
-  --color-rail-panel: #111a2e;
-  --color-rail-panel2: #162035;
-  --color-rail-line: #1e2d47;
-  --color-rail-line2: #2a3d5c;
-  --color-rail-text: #edf1fa;
-  --color-rail-muted: #7a85a0;
-  --color-rail-subtle: #3a4560;
+    /* Core palette */
+    --color-rail-bg: #080c18;
+    --color-rail-surface: #0d1424;
+    --color-rail-panel: #111a2e;
+    --color-rail-panel2: #162035;
+    --color-rail-line: #1e2d47;
+    --color-rail-line2: #2a3d5c;
+    --color-rail-text: #edf1fa;
+    --color-rail-muted: #7a85a0;
+    --color-rail-subtle: #3a4560;
 
-  /* Amber accent */
-  --color-rail-amber: #f5b042;
-  --color-rail-amberDim: #6b4e1a;
-  --color-rail-amberGlow: rgba(245, 176, 66, 0.18);
+    /* Amber accent */
+    --color-rail-amber: #f5b042;
+    --color-rail-amberDim: #6b4e1a;
+    --color-rail-amberGlow: rgba(245, 176, 66, 0.18);
 
-  /* Signals */
-  --color-rail-signal-green: #34d399;
-  --color-rail-signal-red: #f87171;
-  --color-rail-signal-yellow: #fbbf24;
+    /* Signals */
+    --color-rail-signal-green: #34d399;
+    --color-rail-signal-red: #f87171;
+    --color-rail-signal-yellow: #fbbf24;
 
-  /* Fonts */
-  --font-display: "IBM Plex Mono", ui-monospace, monospace;
-  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+    /* Fonts */
+    --font-display: "IBM Plex Mono", ui-monospace, monospace;
+    --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
 
-  /* Shadows */
-  --shadow-ticket: 0 1px 0 0 rgba(255,255,255,0.05) inset, 0 8px 32px -8px rgba(0,0,0,0.7);
-  --shadow-glow-amber: 0 0 24px 4px rgba(245,176,66,0.15);
-  --shadow-window: 0 32px 80px -16px rgba(0,0,0,0.8), 0 0 0 1px rgba(245,176,66,0.06);
+    /* Shadows */
+    --shadow-ticket:
+        0 1px 0 0 rgba(255, 255, 255, 0.05) inset,
+        0 8px 32px -8px rgba(0, 0, 0, 0.7);
+    --shadow-glow-amber: 0 0 24px 4px rgba(245, 176, 66, 0.15);
+    --shadow-window:
+        0 32px 80px -16px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(245, 176, 66, 0.06);
 
-  /* Animations */
-  --animate-blink: blink 1.4s ease-in-out infinite;
-  --animate-rise: rise 0.25s cubic-bezier(0.16,1,0.3,1);
-  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
-  --animate-shimmer: shimmer 2.2s linear infinite;
+    /* Animations */
+    --animate-blink: blink 1.4s ease-in-out infinite;
+    --animate-rise: rise 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+    --animate-shimmer: shimmer 2.2s linear infinite;
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.2; }
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.2;
+    }
 }
 
 @keyframes rise {
-  0% { opacity: 0; transform: translateY(10px) scale(0.98); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+    0% {
+        opacity: 0;
+        transform: translateY(10px) scale(0.98);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
 }
 
 @keyframes pulse-soft {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
 }
 
 @keyframes shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
+    0% {
+        background-position: -200% center;
+    }
+    100% {
+        background-position: 200% center;
+    }
 }
-
-html, body { height: 100%; }
 
 body {
-  background-color: #080c18;
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(245,176,66,0.07), transparent),
-    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(52,211,153,0.04), transparent),
-    radial-gradient(ellipse 50% 30% at 10% 60%, rgba(99,102,241,0.05), transparent);
-  font-family: var(--font-body);
-  color: #edf1fa;
+    background-color: #080c18;
+    background-image:
+        radial-gradient(
+            ellipse 80% 50% at 50% -20%,
+            rgba(245, 176, 66, 0.07),
+            transparent
+        ),
+        radial-gradient(
+            ellipse 60% 40% at 80% 80%,
+            rgba(52, 211, 153, 0.04),
+            transparent
+        ),
+        radial-gradient(
+            ellipse 50% 30% at 10% 60%,
+            rgba(99, 102, 241, 0.05),
+            transparent
+        );
+    font-family: var(--font-body);
+    color: #edf1fa;
 }
 
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-thumb { background: linear-gradient(to bottom, #f5b042, #2a3d5c); border-radius: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar {
+    width: 5px;
+}
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(to bottom, #f5b042, #2a3d5c);
+    border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
 
-*:focus-visible { outline: 2px solid #f5b042; outline-offset: 2px; }
+*:focus-visible {
+    outline: 2px solid #f5b042;
+    outline-offset: 2px;
+}
