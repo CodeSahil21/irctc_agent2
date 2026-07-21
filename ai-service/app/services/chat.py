@@ -1,4 +1,4 @@
-from typing import Any, AsyncGenerator, Dict, Iterator, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from app.schemas.chat import ChatResponse, UsageInfo
 from app.services.claude import ClaudeService
 from app.telemetry.logging import app_logger

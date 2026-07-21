@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     langsmith_api_key: Optional[str] = Field(None, alias="LANGSMITH_API_KEY")
     langsmith_project: str = Field("default", alias="LANGSMITH_PROJECT")
 
+    # MCP Server
+    mcp_server_url: str = Field("http://localhost:3000", alias="MCP_SERVER_URL")
+    mcp_server_timeout: float = Field(30.0, alias="MCP_SERVER_TIMEOUT")
+
+    # MongoDB
+    mongo_url: str = Field("mongodb://localhost:27017", alias="MONGO_URL")
+    mongo_db: str = Field("irctc_ai", alias="MONGO_DB")
+
     @field_validator("anthropic_api_key")
     @classmethod
     def validate_key(cls, v: str) -> str:

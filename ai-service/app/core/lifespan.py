@@ -6,7 +6,18 @@ from langsmith import Client
 from langsmith.wrappers import wrap_anthropic
 
 from app.config.settings import get_settings
+from app.db.mongo import create_mongo_client, get_db
+from app.db.repositories.conversation_repo import setup_indexes as conv_indexes
+from app.db.repositories.preference_repo import setup_indexes as pref_indexes
+from app.db.repositories.execution_repo import setup_indexes as exec_indexes
+from app.graph.builder import create_agent_graph
+from app.mcp.client import MCPClient
+from app.mcp.discovery import MCPDiscovery
+from app.mcp.registry import MCPToolRegistry
+from app.mcp.transport import MCPTransport
+from app.memory.checkpoints import get_checkpointer
 from app.services.claude import ClaudeService
+from app.services.conversation_manager import ConversationManager
 from app.telemetry.logging import app_logger
 
 
@@ -44,6 +55,56 @@ async def lifespan(app: FastAPI):
         default_model=settings.anthropic_default_model,
     )
 
+    # 4. Initialize MCP transport, client, discovery, and registry
+    transport = MCPTransport(
+        base_url=settings.mcp_server_url,
+        timeout=settings.mcp_server_timeout,
+    )
+    mcp_client = MCPClient(transport=transport)
+    await mcp_client.connect()
+
+    discovery = MCPDiscovery(client=mcp_client)
+    await discovery.discover()
+
+    app.state.mcp_client = mcp_client
+    app.state.mcp_registry = MCPToolRegistry(client=mcp_client, discovery=discovery)
+    app_logger.info("MCP registry ready | tools={count}", count=discovery.tool_count)
+
+    # 5. Initialize shared Motor client + database (Phase 9)
+    mongo_client = create_mongo_client(settings.mongo_url)
+    db = get_db(mongo_client, settings.mongo_db)
+    app.state.mongo_client = mongo_client
+    app.state.db = db
+
+    # Create indexes for all collections
+    await conv_indexes(db)
+    await pref_indexes(db)
+    await exec_indexes(db)
+    app_logger.info("MongoDB collections and indexes ready | db={db}", db=settings.mongo_db)
+
+    # 6. Initialize checkpointer — reuses the same Motor client
+    checkpointer = await get_checkpointer(
+        mongo_url=settings.mongo_url,
+        mongo_db=settings.mongo_db,
+    )
+    app.state.checkpointer = checkpointer
+    app_logger.info("Checkpointer initialized (AsyncMongoDBSaver)")
+
+    # 7. Compile the LangGraph agent with checkpointer
+    app.state.agent_graph = create_agent_graph(
+        claude_service=app.state.claude_service,
+        mcp_registry=app.state.mcp_registry,
+        checkpointer=checkpointer,
+    )
+    app_logger.info("Agent graph compiled successfully.")
+
+    # 8. Init ConversationManager (Phase 10)
+    app.state.conversation_manager = ConversationManager(
+        db=db,
+        claude_service=app.state.claude_service,
+    )
+    app_logger.info("ConversationManager initialized.")
+
     app_logger.info(
         "Application startup complete | env={env} | model={model}",
         env=settings.app_env,
@@ -52,7 +113,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 4. Flush LangSmith traces on shutdown
+    # Flush LangSmith traces on shutdown
     app_logger.info("Cleaning up resources for {app_name}...", app_name=settings.app_name)
     if tracing_enabled and api_key:
         try:
@@ -62,6 +123,12 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             app_logger.error("Error flushing LangSmith traces: {error}", error=str(e))
 
-    # 5. Close Anthropic HTTP connection pool
+    # Disconnect MCP client
+    await mcp_client.disconnect()
+
+    # Close shared Motor client (covers both checkpointer and db)
+    mongo_client.close()
+
+    # Close Anthropic HTTP connection pool
     await app.state.claude_service.close()
     app_logger.info("Shutdown complete.")

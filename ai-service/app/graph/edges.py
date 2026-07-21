@@ -1,55 +1,51 @@
-# graph/builder.py
-from functools import partial
-from langgraph.graph import StateGraph, START, END
+# graph/edges.py
+from app.graph.state import TravelState
 
-from app.services.claude import ClaudeService
-from app.graph.state import AgentState
-from app.graph.nodes import planner_node, response_node
-from app.graph.edges import route_after_planner
+# Intents that need no tools — answered directly from static knowledge or simple lookup
+_NO_TOOL_INTENTS = {"general_question", "list_classes", "list_quotas"}
 
 
-# Placeholder node until Phase 5 MCP integration
-async def tool_placeholder(state: AgentState) -> dict:
-    return {}
+def route_after_intent(state: TravelState) -> str:
+    intent = state.get("intent", "general_question")
+    if intent in _NO_TOOL_INTENTS:
+        return "response_node"
+    return "slot_filler_node"
 
 
-def create_agent_graph(claude_service: ClaudeService):
-    """
-    Factory function to build and compile the LangGraph application 
-    with injected ClaudeService dependencies.
-    """
-    # 1. Initialize State Graph
-    builder = StateGraph(AgentState)
-
-    # 2. Pre-bind ClaudeService into node signatures
-    bound_planner = partial(planner_node, claude_service=claude_service)
-    bound_response = partial(response_node, claude_service=claude_service)
-
-    # 3. Register Nodes
-    builder.add_node("planner_node", bound_planner)
-    builder.add_node("response_node", bound_response)
-    builder.add_node("tool_placeholder", tool_placeholder)
-
-    # 4. Add Graph Edges
-    builder.add_edge(START, "planner_node")
-
-    # Conditional edge branching based on needs_tool flag
-    builder.add_conditional_edges(
-        "planner_node",
-        route_after_planner,
-        {
-            "tool_placeholder": "tool_placeholder",
-            "response_node": "response_node",
-        },
-    )
-
-    builder.add_edge("tool_placeholder", "response_node")
-    builder.add_edge("response_node", END)
-
-    # 5. Compile Application
-    return builder.compile()
+def route_after_slot_filler(state: TravelState) -> str:
+    missing = state.get("missing_slots") or []
+    if missing:
+        return "response_node"  # Ask the user for the missing slot
+    return "tool_planner_node"
 
 
-def get_graph_ascii(agent_graph):
-    """Generates an ASCII visualization of the graph flow."""
-    return agent_graph.get_graph().draw_ascii()
+def route_after_tool_planner(state: TravelState) -> str:
+    tool_plan = state.get("tool_plan") or []
+    if not tool_plan:
+        return "response_node"
+    if state.get("confirmation_required"):
+        return "human_approval_node"
+    return "tool_executor_node"
+
+
+def route_after_human_approval(state: TravelState) -> str:
+    if state.get("confirmed"):
+        return "tool_executor_node"
+    return "response_node"  # User declined — explain and offer alternatives
+
+
+def route_after_tool_executor(state: TravelState) -> str:
+    tool_plan = state.get("tool_plan") or []
+    current_index = state.get("current_tool_index") or 0
+    retries = state.get("retries") or 0
+
+    # Still have retries pending for the current tool
+    if retries > 0 and current_index < len(tool_plan):
+        return "tool_executor_node"
+
+    # More tools in the plan
+    if current_index < len(tool_plan):
+        return "tool_executor_node"
+
+    # All tools done
+    return "response_node"

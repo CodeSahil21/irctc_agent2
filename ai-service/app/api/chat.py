@@ -2,10 +2,16 @@ import json
 from typing import Any
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
+from langchain_core.messages import HumanMessage
 from langsmith import traceable
+from langgraph.types import Command
 
-from app.api.dependencies import get_chat_service
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.api.dependencies import get_agent_graph, get_chat_service, get_checkpointer, get_conversation_manager, get_db
+from app.db.models import ConversationDoc, ExecutionLogDoc, MessageDoc
+from app.db.repositories.conversation_repo import increment_turn, save_message, upsert_conversation
+from app.db.repositories.execution_repo import save_execution_log
+from app.memory.preference_memory import load_preferences_from_db
+from app.schemas.chat import AgentRequest, ChatRequest, ChatResponse
 from app.services.chat import ChatService
 from app.telemetry.logging import app_logger
 
@@ -97,3 +103,88 @@ async def stream_chat_completion(
             "X-Accel-Buffering": "no",  # Disables nginx proxy buffering
         },
     )
+
+
+@router.post(
+    "/agent",
+    status_code=status.HTTP_200_OK,
+    summary="Run the IRCTC LangGraph agent",
+    description="Runs the full agent graph: intent → slot filling → tool planning → execution → response.",
+)
+@traceable(name="POST /agent", run_type="chain")
+async def run_agent(
+    request: AgentRequest,
+    agent_graph=Depends(get_agent_graph),
+    checkpointer=Depends(get_checkpointer),
+    db=Depends(get_db),
+    conv_manager=Depends(get_conversation_manager),
+) -> dict:
+    conversation_id = request.conversation_id or "default"
+    config = {"configurable": {"thread_id": conversation_id}}
+
+    # Phase 10 — open conversation (loads prefs, creates/loads conv doc)
+    if request.user_email:
+        await conv_manager.open(
+            conversation_id=conversation_id,
+            user_email=request.user_email,
+            user_name=request.user_name,
+        )
+
+    try:
+        if request.resume:
+            resume_value = request.resume_value if request.resume_value is not None else True
+            result = await agent_graph.ainvoke(Command(resume=resume_value), config=config)
+        else:
+            initial_state = {
+                "messages": [HumanMessage(content=request.message)],
+                "travel": request.travel_context or {},
+                "user_email": request.user_email,
+                "user_name": request.user_name,
+                "search_results": request.search_results,
+                "selected_train": request.selected_train,
+                "availability": request.availability,
+                "fare": request.fare,
+                "passengers": request.passengers,
+                "booking": request.booking,
+            }
+            result = await agent_graph.ainvoke(initial_state, config=config)
+    except Exception as e:
+        app_logger.error("Agent graph error: {error}", error=str(e), exc_info=True)
+        raise
+
+    # Extract last AI message
+    messages = result.get("messages", [])
+    reply = ""
+    for msg in reversed(messages):
+        if hasattr(msg, "content") and not isinstance(msg, HumanMessage):
+            reply = str(msg.content)
+            break
+
+    # Phase 10 — save turn + close (flush prefs)
+    if request.user_email and not request.resume:
+        await conv_manager.save_turn(
+            conversation_id=conversation_id,
+            user_email=request.user_email,
+            user_message=request.message,
+            assistant_reply=reply,
+            intent=result.get("intent"),
+            result=result,
+        )
+        await conv_manager.close(request.user_email)
+
+    interrupted = result.get("confirmation_required") and not result.get("confirmed")
+
+    return {
+        "message": reply,
+        "intent": result.get("intent"),
+        "travel_context": result.get("travel"),
+        "search_results": result.get("search_results"),
+        "selected_train": result.get("selected_train"),
+        "availability": result.get("availability"),
+        "fare": result.get("fare"),
+        "booking": result.get("booking"),
+        "confirmation_required": result.get("confirmation_required"),
+        "confirmation_prompt": result.get("confirmation_prompt"),
+        "interrupted": interrupted,
+        "errors": result.get("errors") or [],
+    }

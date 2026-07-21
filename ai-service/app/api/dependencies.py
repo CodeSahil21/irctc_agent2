@@ -1,5 +1,8 @@
 from fastapi import Depends, Request, HTTPException, status
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.settings import Settings, get_settings
+from app.mcp.client import MCPClient
+from app.mcp.registry import MCPToolRegistry
 from app.services.claude import ClaudeService
 from app.services.chat import ChatService
 
@@ -38,6 +41,67 @@ async def get_db_session(request: Request):
     yield None
 
 
-# 6. MCP Client Dependency
-async def get_mcp_client(request: Request):
-    yield None
+# 6. Agent Graph Dependency — pulled from app.state (compiled once in lifespan)
+def get_agent_graph(request: Request):
+    graph = getattr(request.app.state, "agent_graph", None)
+    if graph is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Agent graph was not initialized on application state.",
+        )
+    return graph
+
+
+# 7. MCP Client Dependency
+def get_mcp_client(request: Request) -> MCPClient:
+    client = getattr(request.app.state, "mcp_client", None)
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MCPClient was not initialized on application state.",
+        )
+    return client
+
+
+# 8. MCP Tool Registry Dependency
+def get_mcp_registry(request: Request) -> MCPToolRegistry:
+    registry = getattr(request.app.state, "mcp_registry", None)
+    if registry is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MCPToolRegistry was not initialized on application state.",
+        )
+    return registry
+
+
+# 9. Checkpointer Dependency
+def get_checkpointer(request: Request):
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    if checkpointer is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Checkpointer was not initialized on application state.",
+        )
+    return checkpointer
+
+
+# 10. MongoDB Database Dependency
+def get_db(request: Request) -> AsyncIOMotorDatabase:
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MongoDB database was not initialized on application state.",
+        )
+    return db
+
+
+# 11. Conversation Manager Dependency
+def get_conversation_manager(request: Request):
+    manager = getattr(request.app.state, "conversation_manager", None)
+    if manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ConversationManager was not initialized on application state.",
+        )
+    return manager
