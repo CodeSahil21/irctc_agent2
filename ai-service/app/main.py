@@ -1,15 +1,20 @@
+import uvicorn
 from fastapi import FastAPI
-from app.config.settings import get_settings
-from app.telemetry.logging import setup_logging, app_logger
-from app.core.lifespan import lifespan  # or wherever your lifespan.py lives!
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.routes import api_router
+from app.config.settings import get_settings
 from app.core.handlers import register_exception_handlers
+from app.core.lifespan import lifespan
+from app.telemetry.logging import app_logger, setup_logging
 
 # 1. Initialize custom logging
 setup_logging()
 
 # 2. Load application settings
 settings = get_settings()
+
+app_logger.info(f"Initializing {settings.app_name} in [{settings.app_env}] environment...")
 
 # 3. Instantiate FastAPI app directly
 app = FastAPI(
@@ -20,14 +25,26 @@ app = FastAPI(
     redoc_url="/redoc" if settings.app_env.lower() != "production" else None,
 )
 
-# Register central error handlers
+# 4. Configure CORS Middleware (crucial for web clients / SSE streaming)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust this to specific domain URLs in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 5. Register central error handlers
 register_exception_handlers(app)
 
-# 4. Include API routers
+# 6. Include API routers
 app.include_router(api_router)
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.debug,
+    )

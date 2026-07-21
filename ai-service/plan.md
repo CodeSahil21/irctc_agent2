@@ -136,14 +136,14 @@ React UI
 
 ## Frontend
 
-* React
-* JWT stored as HttpOnly cookie
-* WebSocket client
-* Streaming UI
-* Interrupt UI
-* Timeline panel
-* Chat history
-* Resume conversations
+- React
+- JWT stored as HttpOnly cookie
+- WebSocket client
+- Streaming UI
+- Interrupt UI
+- Timeline panel
+- Chat history
+- Resume conversations
 
 ---
 
@@ -153,11 +153,11 @@ Keep it exactly as it is.
 
 Responsibilities:
 
-* Login
-* Refresh Token
-* JWT
-* Cookie
-* User identity
+- Login
+- Refresh Token
+- JWT
+- Cookie
+- User identity
 
 AI Service only verifies JWT.
 
@@ -169,16 +169,16 @@ This becomes the entire orchestration layer.
 
 Responsibilities:
 
-* WebSocket
-* REST
-* JWT validation
-* LangGraph
-* Claude SDK
-* MCP client
-* Memory
-* Checkpointing
-* Streaming
-* Metrics
+- WebSocket
+- REST
+- JWT validation
+- LangGraph
+- Claude SDK
+- MCP client
+- Memory
+- Checkpointing
+- Streaming
+- Metrics
 
 ---
 
@@ -280,10 +280,10 @@ Need clarification?
 
 Never let Claude
 
-* sort trains
-* compare fares
-* calculate durations
-* validate schemas
+- sort trains
+- compare fares
+- calculate durations
+- validate schemas
 
 Python should.
 
@@ -295,13 +295,13 @@ This is the heart of the application.
 
 Responsibilities
 
-* branching
-* looping
-* retries
-* interrupt handling
-* resume
-* parallel execution
-* tool chaining
+- branching
+- looping
+- retries
+- interrupt handling
+- resume
+- parallel execution
+- tool chaining
 
 Planner never executes.
 
@@ -313,15 +313,15 @@ Workflow Engine executes.
 
 Production features
 
-* Session management
-* Automatic reconnect
-* Retry
-* Timeout
-* Tool discovery
-* Schema discovery
-* Request validation
-* Response validation
-* Error normalization
+- Session management
+- Automatic reconnect
+- Retry
+- Timeout
+- Tool discovery
+- Schema discovery
+- Request validation
+- Response validation
+- Error normalization
 
 Never call MCP directly from graph nodes.
 
@@ -609,17 +609,17 @@ Huge token reduction.
 
 Use for
 
-* Planning
-* Clarification
-* Reflection
-* Final Response
+- Planning
+- Clarification
+- Reflection
+- Final Response
 
 Don't use for
 
-* Ranking
-* Validation
-* Sorting
-* Filtering
+- Ranking
+- Validation
+- Sorting
+- Filtering
 
 ---
 
@@ -645,12 +645,12 @@ Response
 
 Store
 
-* latency
-* tokens
-* retries
-* tool count
-* interrupts
-* errors
+- latency
+- tokens
+- retries
+- tool count
+- interrupts
+- errors
 
 ---
 
@@ -690,13 +690,13 @@ Frontend becomes extremely responsive.
 
 Use for
 
-* checkpoints
-* pub/sub
-* cache
-* session mapping
-* semantic memory cache
-* MCP session IDs
-* rate limiting
+- checkpoints
+- pub/sub
+- cache
+- session mapping
+- semantic memory cache
+- MCP session IDs
+- rate limiting
 
 ---
 
@@ -722,11 +722,11 @@ Evaluation Results
 
 Use
 
-* LangSmith
-* OpenTelemetry
-* Prometheus
-* Grafana
-* Structured Logging
+- LangSmith
+- OpenTelemetry
+- Prometheus
+- Grafana
+- Structured Logging
 
 ---
 
@@ -734,13 +734,13 @@ Use
 
 Have
 
-* Mock MCP server
-* Tool simulation
-* Conversation replay
-* Evaluation suite
-* Workflow replay
-* Unit tests
-* Integration tests
+- Mock MCP server
+- Tool simulation
+- Conversation replay
+- Evaluation suite
+- Workflow replay
+- Unit tests
+- Integration tests
 
 ---
 
@@ -817,9 +817,36 @@ app/
 
 I would consider this a strong production architecture for your use case. It keeps responsibilities clean:
 
-* **React** handles presentation and streaming UI.
-* **Auth Service** remains the single source of truth for authentication.
-* **AI Service** becomes the intelligent orchestration layer.
-* **MCP Server** remains the system of record for railway operations and tool execution.
+- **React** handles presentation and streaming UI.
+- **Auth Service** remains the single source of truth for authentication.
+- **AI Service** becomes the intelligent orchestration layer.
+- **MCP Server** remains the system of record for railway operations and tool execution.
 
 Most importantly, the design follows a clear principle: **LLMs reason; deterministic code executes.** Claude interprets user intent, plans workflows, reflects on outcomes, and generates natural responses. Everything involving business rules, validation, ranking, retries, state transitions, and tool execution is implemented in Python. That separation makes the system more predictable, easier to test, less expensive to run, and much easier to maintain in production.
+
+Here is a quick checklist of the future optimizations you can apply to ClaudeService as your project scales up:
+
+1. Prompt Caching (Cost & Speed Upgrade)
+   What: Mark large static text (like long IRCTC system prompts, FAQs, or API schemas) with "cache_control": {"type": "ephemeral"}.
+
+Why: Cuts input token costs by up to 90% and dramatically reduces response latency.
+
+2. Extended Thinking / Reasoning
+   What: Pass thinking={"type": "enabled", "budget_tokens": 1024} for complex decision-making tasks (like train routing or ticket rule evaluation).
+
+Why: Lets Claude output hidden internal chain-of-thought steps before providing its final structured answer.
+
+3. Structured Outputs (JSON / Schema Enforcement)
+   What: Enforce exact Pydantic/JSON schemas using strict system instructions or tool definitions.
+
+Why: Guarantees that responses always match your backend models without parsing errors.
+
+4. Resilience & Fault Tolerance
+   What: Add tenacity retries around your Anthropic calls for rate-limiting (429) and transient network dropouts (5xx).
+
+Why: Prevents customer requests from failing when Anthropic experiences temporary hiccups.
+
+5. Token Counting & Usage Telemetry
+   What: Extract response.usage.input_tokens and response.usage.output_tokens from chat_raw and log them to Prometheus or Datadog.
+
+Why: Keeps track of exact per-request costs and tracks user usage metrics
