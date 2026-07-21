@@ -6,11 +6,7 @@ from langchain_core.messages import HumanMessage
 from langsmith import traceable
 from langgraph.types import Command
 
-from app.api.dependencies import get_agent_graph, get_chat_service, get_checkpointer, get_conversation_manager, get_db
-from app.db.models import ConversationDoc, ExecutionLogDoc, MessageDoc
-from app.db.repositories.conversation_repo import increment_turn, save_message, upsert_conversation
-from app.db.repositories.execution_repo import save_execution_log
-from app.memory.preference_memory import load_preferences_from_db
+from app.api.dependencies import get_agent_graph, get_chat_service, get_conversation_manager
 from app.schemas.chat import AgentRequest, ChatRequest, ChatResponse
 from app.services.chat import ChatService
 from app.telemetry.logging import app_logger
@@ -115,8 +111,6 @@ async def stream_chat_completion(
 async def run_agent(
     request: AgentRequest,
     agent_graph=Depends(get_agent_graph),
-    checkpointer=Depends(get_checkpointer),
-    db=Depends(get_db),
     conv_manager=Depends(get_conversation_manager),
 ) -> dict:
     conversation_id = request.conversation_id or "default"
@@ -178,7 +172,7 @@ async def run_agent(
         "message": reply,
         "intent": result.get("intent"),
         "travel_context": result.get("travel"),
-        "search_results": result.get("search_results"),
+        "search_results": result.get("ranked_results") or result.get("search_results"),
         "selected_train": result.get("selected_train"),
         "availability": result.get("availability"),
         "fare": result.get("fare"),

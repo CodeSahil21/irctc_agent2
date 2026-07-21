@@ -19,6 +19,7 @@ from app.memory.checkpoints import get_checkpointer
 from app.services.claude import ClaudeService
 from app.services.conversation_manager import ConversationManager
 from app.telemetry.logging import app_logger
+from app.websocket.manager import _make_manager
 
 
 @asynccontextmanager
@@ -86,6 +87,7 @@ async def lifespan(app: FastAPI):
     checkpointer = await get_checkpointer(
         mongo_url=settings.mongo_url,
         mongo_db=settings.mongo_db,
+        client=mongo_client,
     )
     app.state.checkpointer = checkpointer
     app_logger.info("Checkpointer initialized (AsyncMongoDBSaver)")
@@ -104,6 +106,13 @@ async def lifespan(app: FastAPI):
         claude_service=app.state.claude_service,
     )
     app_logger.info("ConversationManager initialized.")
+
+    # 9. Wire Socket.IO event handlers (Phase 13)
+    _make_manager(
+        agent_graph=app.state.agent_graph,
+        conv_manager=app.state.conversation_manager,
+    )
+    app_logger.info("Socket.IO manager initialized.")
 
     app_logger.info(
         "Application startup complete | env={env} | model={model}",

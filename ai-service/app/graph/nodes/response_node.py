@@ -18,20 +18,30 @@ Guidelines:
 - For live status, show delay, last station, and next station.
 - If there were errors, explain them in plain English and suggest recovery.
 - If asking for missing information, ask only one question at a time.
+- Trains are already sorted by relevance — present them in the order given.
 - Be concise and professional."""
 
 
 async def response_node(state: TravelState, claude_service: ClaudeService) -> Dict[str, Any]:
-    # Layer 2 — windowed conversation history
+    # Prefer ranked results over raw search results for display
+    ranked = state.get("ranked_results")
+    if ranked is not None:
+        state = dict(state)
+        state["search_results"] = ranked
+
     messages = format_for_claude(state.get("messages", []))
 
-    # Layer 1 — tool results and working state context
     context = build_tool_context(state)
     if context:
         if messages and messages[-1]["role"] == "user":
             messages[-1]["content"] += f"\n\n[Tool Results]\n{context}"
         else:
             messages.append({"role": "user", "content": f"[Tool Results]\n{context}"})
+
+    # Inject reflection feedback as a hint if present
+    feedback = state.get("reflection_feedback") or ""
+    if feedback and messages:
+        messages[-1]["content"] += f"\n\n[Quality note]: {feedback}"
 
     raw_response = await claude_service.chat_raw(
         messages=messages,

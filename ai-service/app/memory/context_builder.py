@@ -63,7 +63,7 @@ def build_planner_context(state: TravelState, tools_summary: str) -> str:
         parts.append(f"Travel context: {json.dumps(travel)}")
 
     # Cached results — tell planner what's already done
-    if state.get("search_results"):
+    if state.get("search_results") or state.get("ranked_results"):
         parts.append("Search results: already available in state")
     if state.get("selected_train"):
         parts.append(f"Selected train: {json.dumps(state['selected_train'])}")

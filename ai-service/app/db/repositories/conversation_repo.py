@@ -11,9 +11,16 @@ _MESSAGES = "messages"
 
 
 async def upsert_conversation(db: AsyncIOMotorDatabase, doc: ConversationDoc) -> None:
+    data = doc.model_dump()
+    # Never overwrite summary or turn_count via upsert — those have dedicated updaters
+    safe_set = {k: v for k, v in data.items() if k not in ("summary", "turn_count", "created_at")}
+    safe_set["updated_at"] = datetime.now(timezone.utc)
     await db[_CONVERSATIONS].update_one(
         {"conversation_id": doc.conversation_id},
-        {"$set": doc.model_dump(), "$setOnInsert": {"created_at": doc.created_at}},
+        {
+            "$set": safe_set,
+            "$setOnInsert": {"created_at": doc.created_at, "turn_count": 0, "summary": None},
+        },
         upsert=True,
     )
 
@@ -64,7 +71,7 @@ async def get_messages(
 ) -> List[dict]:
     cursor = (
         db[_MESSAGES]
-        .find({"conversation_id": conversation_id})
+        .find({"conversation_id": conversation_id}, {"_id": 0})
         .sort("created_at", 1)
         .limit(limit)
     )

@@ -32,7 +32,7 @@ _PLAN_TOOL = {
     },
 }
 
-_SYSTEM = """You are an IRCTC travel agent planner. Given the user's intent and current travel context, 
+_SYSTEM = """You are an IRCTC travel agent planner. Given the user's intent and current travel context,
 produce an ordered list of tool calls needed to fulfill the request.
 
 Rules:
@@ -44,25 +44,14 @@ Rules:
 - Use cached context from TravelState — do not repeat already-completed steps.
 - For recommend_trains, set preference to "fastest", "cheapest", or "overnight" based on user goal.
 - For create_reminder and update_reminder, use param name "type" (values: JOURNEY, PNR, BOOKING).
+- check_availability, get_fare, and get_live_status can run in parallel after search_trains.
 - Always call create_tool_plan tool."""
 
-
-def _build_context_summary(state: TravelState) -> str:
-    travel = state.get("travel") or {}
-    parts = [f"Intent: {state.get('intent')}", f"Goal: {state.get('user_goal')}"]
-    if travel:
-        parts.append(f"Travel context: {json.dumps(travel)}")
-    if state.get("search_results"):
-        parts.append("Search results: already available in state")
-    if state.get("selected_train"):
-        parts.append(f"Selected train: {json.dumps(state['selected_train'])}")
-    if state.get("availability"):
-        parts.append("Availability: already checked")
-    if state.get("fare"):
-        parts.append("Fare: already fetched")
-    if state.get("passengers"):
-        parts.append(f"Passengers: {len(state['passengers'])} passenger(s) ready")
-    return "\n".join(parts)
+# Intents where reflection adds value (data-heavy responses)
+_REFLECT_INTENTS = {
+    "search_trains", "recommend_trains", "check_availability",
+    "get_fare", "book_ticket", "get_pnr", "get_booking_history",
+}
 
 
 async def tool_planner_node(
@@ -75,8 +64,12 @@ async def tool_planner_node(
         [{"name": t["name"], "description": t.get("description", "")} for t in available_tools],
         indent=2,
     )
-    # Use context_builder for token-efficient planner context
     full_context = build_planner_context(state, tools_summary)
+
+    # Inject reflection feedback if this is a retry
+    feedback = state.get("reflection_feedback") or ""
+    if feedback:
+        full_context += f"\n\nPrevious attempt feedback (fix this): {feedback}"
 
     response = await claude_service.chat_raw(
         messages=[{"role": "user", "content": full_context}],
@@ -96,15 +89,15 @@ async def tool_planner_node(
     tool_plan = [s["tool"] for s in steps]
     tool_plan_args = [s.get("args", {}) for s in steps]
 
-    # Check if any planned tool requires confirmation
-    confirmation_required = any(
-        get_precondition(t).requires_confirmation for t in tool_plan
-    )
+    confirmation_required = any(get_precondition(t).requires_confirmation for t in tool_plan)
+
+    # Enable reflection for data-heavy intents (only on first pass, not on reflection retry)
+    intent = state.get("intent") or ""
+    reflection_required = intent in _REFLECT_INTENTS and not feedback
 
     app_logger.info(
-        "Tool plan created | steps={steps} | confirmation_required={conf}",
-        steps=tool_plan,
-        conf=confirmation_required,
+        "Tool plan created | steps={steps} | confirmation={conf} | reflection={ref}",
+        steps=tool_plan, conf=confirmation_required, ref=reflection_required,
     )
 
     return {
@@ -112,6 +105,8 @@ async def tool_planner_node(
         "tool_plan_args": tool_plan_args,
         "current_tool_index": 0,
         "confirmation_required": confirmation_required,
+        "reflection_required": reflection_required,
+        "reflection_feedback": "",
         "tool_history": [],
         "retries": 0,
         "errors": [],

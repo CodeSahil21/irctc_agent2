@@ -2,10 +2,13 @@
 from functools import partial
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.graph.edges import (
     route_after_human_approval,
     route_after_intent,
+    route_after_ranking,
+    route_after_reflection,
     route_after_slot_filler,
     route_after_tool_executor,
     route_after_tool_planner,
@@ -13,13 +16,13 @@ from app.graph.edges import (
 from app.graph.nodes import (
     human_approval_node,
     intent_node,
+    ranking_node,
+    reflection_node,
     response_node,
     slot_filler_node,
     tool_executor_node,
     tool_planner_node,
 )
-from langgraph.checkpoint.memory import MemorySaver
-
 from app.graph.state import TravelState
 from app.mcp.registry import MCPToolRegistry
 from app.services.claude import ClaudeService
@@ -35,13 +38,17 @@ def create_agent_graph(
 
     Flow:
         START
-          → intent_node          (classify intent, extract entities)
-          → slot_filler_node     (check required slots, ask if missing)
-          → tool_planner_node    (produce ordered tool plan)
-          → human_approval_node  (gate for destructive actions)
-          → tool_executor_node   (execute one tool, loop until plan done)
-          → response_node        (generate final user-facing response)
+          → intent_node
+          → slot_filler_node
+          → tool_planner_node
+          → human_approval_node  (destructive actions only)
+          → tool_executor_node   (loops; runs parallel groups automatically)
+          → ranking_node         (search intents only — pure Python sort)
+          → reflection_node      (data-heavy intents — Claude quality check)
+          → response_node
           → END
+
+    Reflection failure routes back to tool_planner_node with feedback (max 1 retry).
     """
     builder = StateGraph(TravelState)
 
@@ -51,6 +58,8 @@ def create_agent_graph(
     builder.add_node("tool_planner_node", partial(tool_planner_node, claude_service=claude_service, mcp_registry=mcp_registry))
     builder.add_node("human_approval_node", human_approval_node)
     builder.add_node("tool_executor_node", partial(tool_executor_node, mcp_registry=mcp_registry))
+    builder.add_node("ranking_node", ranking_node)
+    builder.add_node("reflection_node", partial(reflection_node, claude_service=claude_service))
     builder.add_node("response_node", partial(response_node, claude_service=claude_service))
 
     # ── Edges ─────────────────────────────────────────────────────────
@@ -87,7 +96,24 @@ def create_agent_graph(
     builder.add_conditional_edges(
         "tool_executor_node",
         route_after_tool_executor,
-        {"tool_executor_node": "tool_executor_node", "response_node": "response_node"},
+        {
+            "tool_executor_node": "tool_executor_node",
+            "ranking_node": "ranking_node",
+            "reflection_node": "reflection_node",
+            "response_node": "response_node",
+        },
+    )
+
+    builder.add_conditional_edges(
+        "ranking_node",
+        route_after_ranking,
+        {"reflection_node": "reflection_node", "response_node": "response_node"},
+    )
+
+    builder.add_conditional_edges(
+        "reflection_node",
+        route_after_reflection,
+        {"response_node": "response_node", "tool_planner_node": "tool_planner_node"},
     )
 
     builder.add_edge("response_node", END)

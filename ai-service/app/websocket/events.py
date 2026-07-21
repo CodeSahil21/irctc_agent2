@@ -1,11 +1,18 @@
-USER_MESSAGE = "USER_MESSAGE"
-AI_TOKEN = "AI_TOKEN"
-AI_MESSAGE_COMPLETE = "AI_MESSAGE_COMPLETE"
-TOOL_STARTED = "TOOL_STARTED"
-TOOL_COMPLETED = "TOOL_COMPLETED"
-TOOL_FAILED = "TOOL_FAILED"
-GRAPH_NODE = "GRAPH_NODE"
-CHECKPOINT = "CHECKPOINT"
-INTERRUPT = "INTERRUPT"
-RESUME = "RESUME"
-ERROR = "ERROR"
+# websocket/events.py — Socket.IO event name constants
+
+# Client → Server
+QUERY_SEND = "query:send"
+RESUME = "resume"
+TYPING_START = "typing:start"
+TYPING_STOP = "typing:stop"
+
+# Server → Client
+QUERY_ACK = "query:ack"
+AGENT_TYPING = "agent:typing"
+TOOL_START = "tool:start"
+TOOL_DONE = "tool:done"
+TOOL_FAILED = "tool:failed"
+MESSAGE_CHUNK = "message:chunk"
+MESSAGE_COMPLETE = "message:complete"
+MESSAGE_ERROR = "message:error"
+INTERRUPT = "agent:interrupt"

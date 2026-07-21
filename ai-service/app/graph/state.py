@@ -35,6 +35,7 @@ class ToolCall(TypedDict):
     result: Optional[Any]
     status: str  # "pending" | "success" | "error" | "failed"
     retries: int
+    latency_ms: Optional[float]
 
 
 class TravelState(TypedDict):
@@ -69,6 +70,15 @@ class TravelState(TypedDict):
     tool_plan_args: Optional[List[Dict[str, Any]]]
     tool_history: Optional[List[ToolCall]]
     current_tool_index: Optional[int]
+    parallel_results: Optional[Dict[str, Any]]   # tool_name → result for parallel group
+
+    # ── Reflection ────────────────────────────────────────────────────
+    reflection_required: Optional[bool]
+    reflection_passed: Optional[bool]
+    reflection_feedback: Optional[str]
+
+    # ── Ranking ───────────────────────────────────────────────────────
+    ranked_results: Optional[List[Dict[str, Any]]]  # sorted search results
 
     # ── Human Approval / Interrupt Gate ──────────────────────────────
     confirmation_required: Optional[bool]

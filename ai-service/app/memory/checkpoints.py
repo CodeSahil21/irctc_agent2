@@ -14,13 +14,18 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver
 
 
-async def get_checkpointer(mongo_url: str, mongo_db: str) -> AsyncMongoDBSaver:
+async def get_checkpointer(
+    mongo_url: str,
+    mongo_db: str,
+    client: AsyncIOMotorClient = None,
+) -> AsyncMongoDBSaver:
     """
     Creates and returns an AsyncMongoDBSaver checkpointer.
-    Called once at startup in lifespan.py and stored on app.state.
-    The caller is responsible for calling .aclose() on shutdown.
+    Pass the existing Motor client from lifespan to share the connection pool.
+    If no client is provided, a new one is created (test/standalone use).
     """
-    client = AsyncIOMotorClient(mongo_url)
+    if client is None:
+        client = AsyncIOMotorClient(mongo_url)
     checkpointer = AsyncMongoDBSaver(client, db_name=mongo_db)
     await checkpointer.asetup()
     return checkpointer
