@@ -1,16 +1,33 @@
 from fastapi import FastAPI
+from app.config.settings import get_settings
+from app.telemetry.logging import setup_logging, app_logger
+from app.core.lifespan import lifespan  # or wherever your lifespan.py lives!
+from app.api.routes import api_router
+from app.core.handlers import register_exception_handlers
 
-from .api.chat import router as chat_router
-from .api.health import router as health_router
-from .api.websocket import router as websocket_router
+# 1. Initialize custom logging
+setup_logging()
 
-app = FastAPI(title="AI Service", version="0.1.0")
+# 2. Load application settings
+settings = get_settings()
 
-app.include_router(health_router)
-app.include_router(chat_router)
-app.include_router(websocket_router)
+# 3. Instantiate FastAPI app directly
+app = FastAPI(
+    title=settings.app_name,
+    debug=settings.debug,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.app_env.lower() != "production" else None,
+    redoc_url="/redoc" if settings.app_env.lower() != "production" else None,
+)
+
+# Register central error handlers
+register_exception_handlers(app)
+
+# 4. Include API routers
+app.include_router(api_router)
 
 
-@app.get("/")
-async def root() -> dict[str, str]:
-    return {"service": "ai-service", "status": "ok"}
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
