@@ -14,9 +14,7 @@ setup_logging()
 # 2. Load application settings
 settings = get_settings()
 
-app_logger.info(f"Initializing {settings.app_name} in [{settings.app_env}] environment...")
-
-# 3. Instantiate FastAPI app directly
+# 3. Instantiate FastAPI app
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
@@ -25,10 +23,10 @@ app = FastAPI(
     redoc_url="/redoc" if settings.app_env.lower() != "production" else None,
 )
 
-# 4. Configure CORS Middleware (crucial for web clients / SSE streaming)
+# 4. Configure CORS Middleware (required for web clients and SSE streaming)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this to specific domain URLs in production
+    allow_origins=["*"],  # Restrict to specific origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

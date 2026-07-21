@@ -1,8 +1,9 @@
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, Iterator, List, Optional
 from app.schemas.chat import ChatResponse, UsageInfo
 from app.services.claude import ClaudeService
 from app.telemetry.logging import app_logger
 from langsmith import traceable
+
 
 class ChatService:
     """Decoupled Chat Orchestration Service."""
@@ -14,8 +15,8 @@ class ChatService:
         self, conversation_history: Optional[List[Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Helper to safely normalize Pydantic ChatMessage models or dict items
-        into raw dictionaries for the Anthropic SDK.
+        Safely normalize Pydantic ChatMessage models or raw dicts
+        into plain dictionaries for the Anthropic SDK.
         """
         if not conversation_history:
             return []
@@ -23,16 +24,14 @@ class ChatService:
         formatted_history: List[Dict[str, Any]] = []
         for msg in conversation_history:
             if hasattr(msg, "model_dump"):
-                # Handle Pydantic v2 models
                 formatted_history.append(msg.model_dump())
             elif hasattr(msg, "dict"):
-                # Handle Pydantic v1 models
                 formatted_history.append(msg.dict())
             elif isinstance(msg, dict):
-                # Handle raw dictionaries
                 formatted_history.append(dict(msg))
 
         return formatted_history
+
     @traceable(name="ChatService.send_message", run_type="chain")
     async def send_message(
         self,
@@ -45,14 +44,13 @@ class ChatService:
         **kwargs: Any,
     ) -> ChatResponse:
         """Sends a message, captures SDK response metadata, and returns a ChatResponse schema."""
-        
-        # 1. Normalize history safely to ensure raw dicts
         messages = self._normalize_history(conversation_history)
-        
-        # 2. Append the current incoming user prompt
         messages.append({"role": "user", "content": message})
 
-        app_logger.debug(f"ChatService processing message count: {len(messages)}")
+        app_logger.debug(
+            "ChatService processing | message_count={count}",
+            count=len(messages),
+        )
 
         raw_response = await self.claude_service.chat_raw(
             messages=messages,
@@ -62,12 +60,10 @@ class ChatService:
             **kwargs,
         )
 
-        # 3. Extract text content safely from SDK block output
         reply_text = "".join(
             block.text for block in raw_response.content if getattr(block, "type", None) == "text"
         )
 
-        # 4. Extract token usage metadata
         usage_data = None
         if hasattr(raw_response, "usage") and raw_response.usage:
             usage_data = UsageInfo(
@@ -77,11 +73,12 @@ class ChatService:
 
         return ChatResponse(
             message=reply_text,
-            model=getattr(raw_response, "model", "claude-3-5-sonnet-20241022"),
+            model=getattr(raw_response, "model", self.claude_service.default_model),
             conversation_id=conversation_id,
             usage=usage_data,
             stop_reason=getattr(raw_response, "stop_reason", None),
         )
+
     @traceable(name="ChatService.stream_message", run_type="chain")
     async def stream_message(
         self,
@@ -93,16 +90,14 @@ class ChatService:
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Streams text chunks token-by-token."""
-        
-        # 1. Normalize history safely
         messages = self._normalize_history(conversation_history)
-        
-        # 2. Append incoming prompt
         messages.append({"role": "user", "content": message})
 
-        app_logger.debug(f"ChatService streaming message count: {len(messages)}")
+        app_logger.debug(
+            "ChatService streaming | message_count={count}",
+            count=len(messages),
+        )
 
-        # 3. Yield stream deltas directly from lower-level ClaudeService
         async for chunk in self.claude_service.stream_chat(
             messages=messages,
             system=system_prompt,

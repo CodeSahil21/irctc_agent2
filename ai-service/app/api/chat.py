@@ -84,7 +84,7 @@ async def stream_chat_completion(
             yield f"data: {done_payload}\n\n"
 
         except Exception as e:
-            app_logger.error(f"Error during streaming execution: {str(e)}", exc_info=True)
+            app_logger.error("Error during streaming execution: {error}", error=str(e), exc_info=True)
             error_payload = json.dumps({"error": str(e)})
             yield f"data: {error_payload}\n\n"
 

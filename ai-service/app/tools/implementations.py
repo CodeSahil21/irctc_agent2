@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional
 from langsmith import traceable
 
+
+@traceable(name="search_trains", run_type="tool")
 def search_trains(fromStation: str, toStation: str, journeyDate: str, quota: str = "GN") -> Dict[str, Any]:
     return {
         "trains": [{
@@ -17,6 +19,8 @@ def search_trains(fromStation: str, toStation: str, journeyDate: str, quota: str
         }]
     }
 
+
+@traceable(name="check_availability", run_type="tool")
 def check_availability(trainNumber: str, travelClass: str, quota: str, journeyDate: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -29,6 +33,8 @@ def check_availability(trainNumber: str, travelClass: str, quota: str, journeyDa
         "available": True
     }
 
+
+@traceable(name="get_fare", run_type="tool")
 def get_fare(trainNumber: str, travelClass: str, quota: str, fromStation: str, toStation: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -48,6 +54,8 @@ def get_fare(trainNumber: str, travelClass: str, quota: str, fromStation: str, t
         }
     }
 
+
+@traceable(name="get_route", run_type="tool")
 def get_route(trainNumber: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -58,6 +66,8 @@ def get_route(trainNumber: str) -> Dict[str, Any]:
         ]
     }
 
+
+@traceable(name="get_seat_map", run_type="tool")
 def get_seat_map(trainNumber: str, travelClass: str, journeyDate: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -69,6 +79,8 @@ def get_seat_map(trainNumber: str, travelClass: str, journeyDate: str) -> Dict[s
         ]
     }
 
+
+@traceable(name="get_boarding_points", run_type="tool")
 def get_boarding_points(trainNumber: str, fromStation: str, journeyDate: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -79,6 +91,8 @@ def get_boarding_points(trainNumber: str, fromStation: str, journeyDate: str) ->
         ]
     }
 
+
+@traceable(name="search_train_by_number", run_type="tool")
 def search_train_by_number(trainNumber: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -93,6 +107,8 @@ def search_train_by_number(trainNumber: str) -> Dict[str, Any]:
         "totalStops": 12
     }
 
+
+@traceable(name="get_live_status", run_type="tool")
 def get_live_status(trainNumber: str, date: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -103,6 +119,8 @@ def get_live_status(trainNumber: str, date: str) -> Dict[str, Any]:
         "nextStation": {"code": "RTM", "name": "Ratlam Junction", "expectedArrival": "00:20"}
     }
 
+
+@traceable(name="get_train_schedule", run_type="tool")
 def get_train_schedule(trainNumber: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -114,6 +132,8 @@ def get_train_schedule(trainNumber: str) -> Dict[str, Any]:
         ]
     }
 
+
+@traceable(name="get_platform", run_type="tool")
 def get_platform(trainNumber: str, stationCode: str) -> Dict[str, Any]:
     return {
         "trainNumber": trainNumber,
@@ -124,6 +144,8 @@ def get_platform(trainNumber: str, stationCode: str) -> Dict[str, Any]:
         "scheduledDeparture": "16:55"
     }
 
+
+@traceable(name="search_stations", run_type="tool")
 def search_stations(query: str) -> Dict[str, Any]:
     return {
         "stations": [
@@ -132,9 +154,13 @@ def search_stations(query: str) -> Dict[str, Any]:
         ]
     }
 
+
+@traceable(name="find_station_code", run_type="tool")
 def find_station_code(query: str) -> Dict[str, Any]:
     return {"code": "NDLS", "fullName": "New Delhi"}
 
+
+@traceable(name="get_nearby_stations", run_type="tool")
 def get_nearby_stations(lat: float, lng: float) -> Dict[str, Any]:
     return {
         "lat": lat, "lng": lng,
@@ -144,6 +170,8 @@ def get_nearby_stations(lat: float, lng: float) -> Dict[str, Any]:
         ]
     }
 
+
+@traceable(name="list_classes", run_type="tool")
 def list_classes() -> List[Dict[str, str]]:
     return [
         {"code": "SL", "name": "Sleeper"},
@@ -156,6 +184,8 @@ def list_classes() -> List[Dict[str, str]]:
         {"code": "VS", "name": "Vistadome AC"}
     ]
 
+
+@traceable(name="list_quotas", run_type="tool")
 def list_quotas() -> List[Dict[str, str]]:
     return [
         {"code": "GN", "name": "General"},
@@ -166,6 +196,8 @@ def list_quotas() -> List[Dict[str, str]]:
         {"code": "SS", "name": "Senior Citizen"}
     ]
 
+
+@traceable(name="recommend_trains", run_type="tool")
 def recommend_trains(fromStation: str, toStation: str, journeyDate: str, preference: str, travelClass: str = "SL", quota: str = "GN") -> Dict[str, Any]:
     return {
         "trains": [{
@@ -177,6 +209,8 @@ def recommend_trains(fromStation: str, toStation: str, journeyDate: str, prefere
         }]
     }
 
+
+@traceable(name="book_ticket", run_type="tool")
 def book_ticket(trainNumber: str, trainName: str, source: str, destination: str, journeyDate: str, travelClass: str, quota: str, fare: float, passengers: list) -> Dict[str, Any]:
     return {
         "id": "bk-998877",
@@ -194,9 +228,13 @@ def book_ticket(trainNumber: str, trainName: str, source: str, destination: str,
         "passengers": passengers
     }
 
+
+@traceable(name="cancel_ticket", run_type="tool")
 def cancel_ticket(pnr: str) -> Dict[str, Any]:
     return {"pnr": pnr, "updatedCount": 1, "status": "CANCELLED"}
 
+
+@traceable(name="get_pnr", run_type="tool")
 def get_pnr(pnr: str) -> Dict[str, Any]:
     return {
         "id": "pnr-tr-123",
@@ -206,6 +244,8 @@ def get_pnr(pnr: str) -> Dict[str, Any]:
         "checkedAt": "2026-07-21T15:00:00Z"
     }
 
+
+@traceable(name="get_booking", run_type="tool")
 def get_booking(pnr: str) -> Dict[str, Any]:
     return {
         "id": "bk-998877",
@@ -219,6 +259,8 @@ def get_booking(pnr: str) -> Dict[str, Any]:
         "passengers": [{"name": "Rahul Sharma", "age": 28, "gender": "MALE", "berth": "LB"}]
     }
 
+
+@traceable(name="get_booking_history", run_type="tool")
 def get_booking_history() -> List[Dict[str, Any]]:
     return [{
         "id": "bk-998877",
@@ -229,17 +271,23 @@ def get_booking_history() -> List[Dict[str, Any]]:
         "passengers": [{"name": "Rahul Sharma", "age": 28, "gender": "MALE"}]
     }]
 
+
+@traceable(name="update_booking_status", run_type="tool")
 def update_booking_status(pnr: str, status: str, transactionId: Optional[str] = None) -> Dict[str, Any]:
     return {"pnr": pnr, "status": status, "transactionId": transactionId, "updatedCount": 1}
 
+
+@traceable(name="update_boarding_point", run_type="tool")
 def update_boarding_point(pnr: str, newBoardingStation: str) -> Dict[str, Any]:
     return {"pnr": pnr, "newBoardingStation": newBoardingStation, "status": "UPDATED"}
 
-def create_reminder(type: str, reminderAt: str, bookingId: Optional[str] = None, metadata: Optional[dict] = None) -> Dict[str, Any]:
+
+@traceable(name="create_reminder", run_type="tool")
+def create_reminder(reminder_type: str, reminderAt: str, bookingId: Optional[str] = None, metadata: Optional[dict] = None) -> Dict[str, Any]:
     return {
         "id": "rem-001122",
         "userId": "usr_test@example.com",
-        "type": type,
+        "type": reminder_type,
         "reminderAt": reminderAt,
         "bookingId": bookingId,
         "metadata": metadata or {},
@@ -247,6 +295,8 @@ def create_reminder(type: str, reminderAt: str, bookingId: Optional[str] = None,
         "createdAt": "2026-07-21T15:10:00Z"
     }
 
+
+@traceable(name="get_reminders", run_type="tool")
 def get_reminders() -> List[Dict[str, Any]]:
     return [{
         "id": "rem-001122",
@@ -255,12 +305,18 @@ def get_reminders() -> List[Dict[str, Any]]:
         "sent": False
     }]
 
-def update_reminder(reminderId: str, reminderAt: Optional[str] = None, type: Optional[str] = None, metadata: Optional[dict] = None) -> Dict[str, Any]:
+
+@traceable(name="update_reminder", run_type="tool")
+def update_reminder(reminderId: str, reminderAt: Optional[str] = None, reminder_type: Optional[str] = None, metadata: Optional[dict] = None) -> Dict[str, Any]:
     return {"reminderId": reminderId, "reminderAt": reminderAt, "status": "UPDATED"}
 
+
+@traceable(name="delete_reminder", run_type="tool")
 def delete_reminder(reminderId: str) -> Dict[str, Any]:
     return {"reminderId": reminderId, "deleted": True}
 
+
+@traceable(name="add_saved_passenger", run_type="tool")
 def add_saved_passenger(name: str, age: int, gender: str, berthPreference: Optional[str] = None, seniorCitizen: bool = False) -> Dict[str, Any]:
     return {
         "id": "pass-7788",
@@ -273,6 +329,8 @@ def add_saved_passenger(name: str, age: int, gender: str, berthPreference: Optio
         "createdAt": "2026-07-21T15:12:00Z"
     }
 
+
+@traceable(name="get_saved_passengers", run_type="tool")
 def get_saved_passengers() -> List[Dict[str, Any]]:
     return [{
         "id": "pass-7788",
@@ -282,18 +340,3 @@ def get_saved_passengers() -> List[Dict[str, Any]]:
         "berthPreference": "LB",
         "seniorCitizen": False
     }]
-
-
-_ALL_TOOLS = [
-    search_trains, check_availability, get_fare, get_route, get_seat_map,
-    get_boarding_points, search_train_by_number, get_live_status,
-    get_train_schedule, get_platform, search_stations, find_station_code,
-    get_nearby_stations, list_classes, list_quotas, recommend_trains,
-    book_ticket, cancel_ticket, get_pnr, get_booking, get_booking_history,
-    update_booking_status, update_boarding_point, create_reminder,
-    get_reminders, update_reminder, delete_reminder, add_saved_passenger,
-    get_saved_passengers
-]
-
-for tool_func in _ALL_TOOLS:
-    globals()[tool_func.__name__] = traceable(name=tool_func.__name__, run_type="tool")(tool_func)

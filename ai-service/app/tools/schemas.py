@@ -269,12 +269,12 @@ TOOLS_SCHEMA = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "enum": ["JOURNEY", "PNR", "BOOKING"]},
+                "reminder_type": {"type": "string", "enum": ["JOURNEY", "PNR", "BOOKING"]},
                 "reminderAt": {"type": "string"},
                 "bookingId": {"type": "string"},
                 "metadata": {"type": "object"}
             },
-            "required": ["type", "reminderAt"]
+            "required": ["reminder_type", "reminderAt"]
         }
     },
     {
@@ -290,7 +290,7 @@ TOOLS_SCHEMA = [
             "properties": {
                 "reminderId": {"type": "string"},
                 "reminderAt": {"type": "string"},
-                "type": {"type": "string"},
+                "reminder_type": {"type": "string"},
                 "metadata": {"type": "object"}
             },
             "required": ["reminderId"]
@@ -327,6 +327,7 @@ TOOLS_SCHEMA = [
     }
 ]
 
+# PARSER_TOOL_SCHEMA is reserved for future intent-parsing use
 PARSER_TOOL_SCHEMA = {
     "name": "parse_user_intent",
     "description": "Extract structured intent and normalized parameters from freeform user queries.",
