@@ -1,8 +1,11 @@
-from typing import TypedDict
+# graph/state.py
+from typing import Annotated,Optional,TypedDict
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages  # 👈 Import directly from langgraph
 
 
-class GraphState(TypedDict, total=False):
-    user_id: str
-    message: str
-    plan: list[str]
-    result: str
+class AgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+
+    intent: Optional[str]
+    needs_tool: Optional[bool]
