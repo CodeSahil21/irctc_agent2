@@ -15,7 +15,7 @@ export function MessageList({ messages, isAgentTyping, onWidgetSubmit }: Message
   const containerRef = useAutoScroll(messages.length + (isAgentTyping ? 1 : 0));
 
   return (
-    <div ref={containerRef} className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+    <div ref={containerRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
       {messages.map((message) => (
         <MessageBubble key={message.id} message={message} onWidgetSubmit={onWidgetSubmit} />
       ))}

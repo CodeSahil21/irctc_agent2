@@ -30,7 +30,7 @@ export default function RootLayout({
             lang="en"
             className={`${displayFont.variable} ${bodyFont.variable}`}
         >
-            <body className="min-h-screen overflow-x-hidden">
+            <body className="h-screen overflow-hidden">
                 <StoreProvider>{children}</StoreProvider>
             </body>
         </html>

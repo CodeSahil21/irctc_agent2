@@ -10,7 +10,7 @@ export function ChatWindow() {
 
   return (
     <div
-      className="flex h-[100dvh] w-full flex-col md:h-[92vh] md:max-w-5xl md:rounded-2xl overflow-hidden"
+      className="flex h-full w-full flex-col rounded-none md:rounded-2xl overflow-hidden"
       style={{
         border: "1px solid rgba(245,176,66,0.12)",
         background: "linear-gradient(160deg, #0f1829 0%, #0d1424 60%, #0a1020 100%)",

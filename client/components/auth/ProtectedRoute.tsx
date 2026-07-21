@@ -16,7 +16,7 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
 
   if (!initialized) {
     return (
-      <div className="flex min-h-[100dvh] w-full items-center justify-center">
+      <div className="flex h-screen w-full items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           {/* Logo badge */}
           <div

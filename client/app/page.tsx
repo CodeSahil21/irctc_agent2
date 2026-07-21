@@ -5,11 +5,11 @@ import ProtectedRoute from "@/components/auth/ProtectedRoute";
 export default function HomePage() {
   return (
     <ProtectedRoute>
-      <main className="flex min-h-[100dvh] w-full flex-col items-center p-0 md:p-8">
-        <div className="flex w-full max-w-4xl justify-end px-4 py-3">
+      <main className="flex h-full w-full flex-col items-center overflow-hidden box-border p-3 md:p-6">
+        <div className="flex w-full max-w-7xl shrink-0 justify-end px-2 py-2">
           <LogoutButton />
         </div>
-        <div className="flex flex-1 w-full items-center justify-center">
+        <div className="flex min-h-0 flex-1 w-full max-w-7xl items-stretch">
           <ChatWindow />
         </div>
       </main>
