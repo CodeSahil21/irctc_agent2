@@ -1,4 +1,6 @@
+# app/config/settings.py
 from functools import lru_cache
+from typing import Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,6 +11,10 @@ class Settings(BaseSettings):
     debug: bool = Field(False, alias="DEBUG")
     anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
     log_level: str = Field("info", alias="LOG_LEVEL")
+    langsmith_tracing: bool = Field(True, alias="LANGSMITH_TRACING")
+    langsmith_endpoint: str = Field("https://api.smith.langchain.com", alias="LANGSMITH_ENDPOINT")
+    langsmith_api_key: Optional[str] = Field(None, alias="LANGSMITH_API_KEY")
+    langsmith_project: str = Field("default", alias="LANGSMITH_PROJECT")
 
     @field_validator("anthropic_api_key")
     @classmethod

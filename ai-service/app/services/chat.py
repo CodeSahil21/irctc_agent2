@@ -2,7 +2,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from app.schemas.chat import ChatResponse, UsageInfo
 from app.services.claude import ClaudeService
 from app.telemetry.logging import app_logger
-
+from langsmith import traceable
 
 class ChatService:
     """Decoupled Chat Orchestration Service."""
@@ -33,7 +33,7 @@ class ChatService:
                 formatted_history.append(dict(msg))
 
         return formatted_history
-
+    @traceable(name="ChatService.send_message", run_type="chain")
     async def send_message(
         self,
         message: str,
@@ -82,7 +82,7 @@ class ChatService:
             usage=usage_data,
             stop_reason=getattr(raw_response, "stop_reason", None),
         )
-
+    @traceable(name="ChatService.stream_message", run_type="chain")
     async def stream_message(
         self,
         message: str,

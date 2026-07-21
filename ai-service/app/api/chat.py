@@ -2,6 +2,7 @@ import json
 from typing import Any
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
+from langsmith import traceable
 
 from app.api.dependencies import get_chat_service
 from app.schemas.chat import ChatRequest, ChatResponse
@@ -10,10 +11,6 @@ from app.telemetry.logging import app_logger
 
 router = APIRouter()
 
-
-# ---------------------------------------------------------
-# 1. Synchronous / REST Endpoint
-# ---------------------------------------------------------
 @router.post(
     "/chat",
     response_model=ChatResponse,
@@ -21,6 +18,8 @@ router = APIRouter()
     summary="Send a message to Claude (Non-streaming)",
     description="Validates input, sends conversation history to ChatService, and returns a JSON response.",
 )
+# 2. Add @traceable decorator to trace the sync endpoint
+@traceable(name="POST /chat", run_type="chain")
 async def create_chat_completion(
     request: ChatRequest,
     chat_service: ChatService = Depends(get_chat_service),
@@ -44,14 +43,14 @@ async def create_chat_completion(
     )
 
 
-# ---------------------------------------------------------
-# 2. Real-Time SSE Streaming Endpoint
-# ---------------------------------------------------------
+
 @router.post(
     "/chat/stream",
     summary="Stream Claude response token-by-token",
     description="Establishes an SSE stream emitting JSON tokens in real-time.",
 )
+
+@traceable(name="POST /chat/stream", run_type="chain")
 async def stream_chat_completion(
     request: ChatRequest,
     chat_service: ChatService = Depends(get_chat_service),

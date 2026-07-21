@@ -2,6 +2,7 @@ import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 import anthropic
 from anthropic import AsyncAnthropic
+from langsmith.wrappers import wrap_anthropic
 
 from app.core.exceptions import (
     AuthenticationException,
@@ -21,7 +22,7 @@ class ClaudeService:
         client: AsyncAnthropic,  # ✅ Accept pre-initialized client instance from app state
         default_model: str = "claude-haiku-4-5",
     ) -> None:
-        self.client = client
+        self.client = wrap_anthropic(client)
         self.default_model = default_model
 
     async def chat_raw(

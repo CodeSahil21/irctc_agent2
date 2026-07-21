@@ -17,6 +17,9 @@ dependencies = [
 	"PyJWT>=2.9.0",
 	"anthropic>=0.45.0",
 	"loguru>=0.7.3",
+	"langsmith[claude-agent-sdk]>=0.10.9",
+	"claude-agent-sdk>=0.2.124",
+	"python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]
