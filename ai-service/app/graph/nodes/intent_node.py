@@ -1,4 +1,6 @@
 # graph/nodes/intent_node.py
+import re
+from datetime import date, timedelta
 from typing import Any, Dict
 
 from app.graph.state import TravelState
@@ -21,6 +23,69 @@ INTENTS = [
     "general_question",
 ]
 
+# Common city → station code mappings
+_CITY_TO_CODE: Dict[str, str] = {
+    "delhi": "NDLS", "new delhi": "NDLS", "ndls": "NDLS",
+    "mumbai": "BCT", "bombay": "BCT", "mumbai central": "BCT", "bct": "BCT",
+    "kolkata": "HWH", "calcutta": "HWH", "howrah": "HWH", "hwh": "HWH",
+    "chennai": "MAS", "madras": "MAS", "mas": "MAS",
+    "bangalore": "SBC", "bengaluru": "SBC", "sbc": "SBC",
+    "hyderabad": "HYB", "hyb": "HYB",
+    "pune": "PUNE", "ahmedabad": "ADI", "adi": "ADI",
+    "jaipur": "JP", "jp": "JP",
+    "lucknow": "LKO", "lko": "LKO",
+    "patna": "PNBE", "pnbe": "PNBE",
+    "bhopal": "BPL", "bpl": "BPL",
+    "nagpur": "NGP", "ngp": "NGP",
+    "secunderabad": "SC", "sc": "SC",
+    "agra": "AGC", "agc": "AGC",
+    "mathura": "MTJ", "mtj": "MTJ",
+    "gwalior": "GWL", "gwl": "GWL",
+    "vadodara": "BRC", "baroda": "BRC", "brc": "BRC",
+    "visakhapatnam": "VSKP", "vizag": "VSKP", "vskp": "VSKP",
+    "vijayawada": "BZA", "bza": "BZA",
+    "coimbatore": "CBE", "cbe": "CBE",
+    "madurai": "MDU", "mdu": "MDU",
+    "thiruvananthapuram": "TVC", "trivandrum": "TVC", "tvc": "TVC",
+    "kochi": "ERS", "ernakulam": "ERS", "ers": "ERS",
+}
+
+
+def _normalize_station(value: str) -> str:
+    """Return station code if city name is recognized, else return value uppercased."""
+    return _CITY_TO_CODE.get(value.lower().strip(), value.upper().strip())
+
+
+def _normalize_date(value: str) -> str:
+    """Convert relative date expressions to YYYY-MM-DD. Returns original if unrecognized."""
+    today = date.today()
+    v = value.lower().strip()
+    if v in ("today",):
+        return today.isoformat()
+    if v in ("tomorrow",):
+        return (today + timedelta(days=1)).isoformat()
+    if "day after" in v:
+        return (today + timedelta(days=2)).isoformat()
+    # "this week" / "anytime this week" / "next week" → nearest upcoming date (tomorrow)
+    if "this week" in v or "next week" in v or "anytime" in v:
+        return (today + timedelta(days=1)).isoformat()
+    # "next monday" etc.
+    days = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+            "friday": 4, "saturday": 5, "sunday": 6}
+    for day_name, day_num in days.items():
+        if day_name in v:
+            delta = (day_num - today.weekday()) % 7 or 7
+            return (today + timedelta(days=delta)).isoformat()
+    # Already YYYY-MM-DD
+    if re.match(r"\d{4}-\d{2}-\d{2}", value):
+        return value
+    # DD-MM-YYYY
+    m = re.match(r"(\d{2})-(\d{2})-(\d{4})", value)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    return value
+
+
 _INTENT_TOOL = {
     "name": "classify_intent",
     "description": "Classify user intent and extract travel entities from the message.",
@@ -39,7 +104,6 @@ _INTENT_TOOL = {
         },
         "required": ["intent", "user_goal"],
     },
-    # Cache this tool schema — it is static and large (enum list never changes)
     "cache_control": {"type": "ephemeral"},
 }
 
@@ -50,7 +114,6 @@ _SYSTEM = (
 
 
 async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict[str, Any]:
-    # Layer 2 — windowed conversation messages
     messages = format_for_claude(state.get("messages", []))
 
     response = await claude_service.chat_raw(
@@ -74,10 +137,12 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
 
     # Merge extracted entities into existing travel context
     existing_travel: Dict[str, Any] = dict(state.get("travel") or {})
-    for slot in ("from_station", "to_station", "date", "travel_class", "quota", "train_number"):
+    for slot in ("from_station", "to_station", "travel_class", "quota", "train_number"):
         value = tool_input.get(slot)
         if value:
-            existing_travel[slot] = value
+            existing_travel[slot] = _normalize_station(value) if slot in ("from_station", "to_station") else value
+    if tool_input.get("date"):
+        existing_travel["date"] = _normalize_date(tool_input["date"])
     if tool_input.get("pnr"):
         existing_travel["pnr"] = tool_input["pnr"]
 
@@ -89,7 +154,6 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
 
     app_logger.info("Intent classified | intent={intent} | goal={goal}", intent=intent, goal=user_goal)
 
-    # Reset per-turn working memory fields
     updates = reset_turn_state(state)
     updates.update({
         "intent": intent,

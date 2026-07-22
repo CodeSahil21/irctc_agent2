@@ -65,5 +65,7 @@ def route_after_ranking(state: TravelState) -> str:
 def route_after_reflection(state: TravelState) -> str:
     if state.get("reflection_passed"):
         return "response_node"
-    # Reflection failed — re-plan with feedback
+    # Hard cap: if we've already retried once, stop regardless
+    if (state.get("reflection_retries") or 0) >= 1:
+        return "response_node"
     return "tool_planner_node"

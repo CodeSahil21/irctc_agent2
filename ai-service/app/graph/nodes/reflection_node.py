@@ -71,7 +71,7 @@ async def reflection_node(state: TravelState, claude_service: ClaudeService) -> 
             tools=[_REFLECT_TOOL],
             tool_choice={"type": "tool", "name": "reflect_on_results"},
             temperature=0.0,
-            max_tokens=256,
+            max_tokens=512,
             cache_system=True,
         )
 

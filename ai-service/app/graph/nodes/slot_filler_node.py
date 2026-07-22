@@ -1,4 +1,4 @@
-# graph/nodes/slot_filler_node.py
+import re
 from typing import Any, Dict, List
 
 from app.graph.state import TravelState
@@ -22,6 +22,18 @@ _INTENT_TO_TOOL: Dict[str, str] = {
     "cancel_ticket": "cancel_ticket",
 }
 
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _slot_filled(slot: str, value: Any) -> bool:
+    """Return True only if the slot value is genuinely usable."""
+    if not value:
+        return False
+    if slot == "date":
+        # Must be a proper ISO date — reject vague strings like "this week"
+        return bool(_ISO_DATE_RE.match(str(value)))
+    return True
+
 
 def slot_filler_node(state: TravelState) -> Dict[str, Any]:
     intent = state.get("intent", "general_question")
@@ -36,7 +48,7 @@ def slot_filler_node(state: TravelState) -> Dict[str, Any]:
     missing: List[str] = []
 
     for slot in precondition.required_slots:
-        if not travel.get(slot):
+        if not _slot_filled(slot, travel.get(slot)):
             missing.append(slot)
 
     if missing:

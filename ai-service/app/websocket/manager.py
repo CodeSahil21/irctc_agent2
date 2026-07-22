@@ -299,8 +299,14 @@ async def _run_graph(
             output = data.get("output") or {}
             result = output
 
-    # Check if graph was interrupted (human approval)
-    if result.get("confirmation_required") and not result.get("confirmed"):
+    # Check if graph was interrupted (human approval pending)
+    # Only fire interrupt if book_ticket (or other destructive tool) hasn't run yet
+    tool_history = result.get("tool_history") or []
+    destructive_ran = any(
+        t.get("tool") in ("book_ticket", "cancel_ticket", "update_boarding_point", "delete_reminder")
+        for t in tool_history
+    )
+    if result.get("confirmation_required") and not result.get("confirmed") and not destructive_ran:
         await sio.emit(events.INTERRUPT, {
             "id": msg_id,
             "prompt": result.get("confirmation_prompt", "Please confirm this action."),

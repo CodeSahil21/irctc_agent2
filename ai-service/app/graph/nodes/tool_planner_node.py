@@ -108,9 +108,12 @@ async def tool_planner_node(
 
     confirmation_required = any(get_precondition(t).requires_confirmation for t in tool_plan)
 
-    # Enable reflection for data-heavy intents (only on first pass, not on reflection retry)
+    # Enable reflection for data-heavy intents — hard-cap at 1 retry
     intent = state.get("intent") or ""
-    reflection_required = intent in _REFLECT_INTENTS and not feedback
+    reflection_retries = state.get("reflection_retries") or 0
+    is_reflection_retry = bool(feedback)  # feedback set means we're on a retry pass
+    reflection_required = intent in _REFLECT_INTENTS and reflection_retries < 1
+    next_reflection_retries = (reflection_retries + 1) if is_reflection_retry else 0
 
     app_logger.info(
         "Tool plan created | steps={steps} | confirmation={conf} | reflection={ref}",
@@ -124,6 +127,7 @@ async def tool_planner_node(
         "confirmation_required": confirmation_required,
         "reflection_required": reflection_required,
         "reflection_feedback": "",
+        "reflection_retries": next_reflection_retries,
         "tool_history": [],
         "retries": 0,
         "errors": [],

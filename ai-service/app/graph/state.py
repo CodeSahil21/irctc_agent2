@@ -79,6 +79,7 @@ class TravelState(TypedDict):
     reflection_required: Optional[bool]
     reflection_passed: Optional[bool]
     reflection_feedback: Optional[str]
+    reflection_retries: Optional[int]
 
     # ── Ranking ───────────────────────────────────────────────────────
     ranked_results: Optional[List[Dict[str, Any]]]  # sorted search results
