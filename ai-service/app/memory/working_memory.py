@@ -1,15 +1,3 @@
-# memory/working_memory.py
-"""
-Layer 1 — Working Memory
-
-Lives entirely inside TravelState for the duration of one agent execution.
-Destroyed (or checkpointed) when the graph reaches END.
-
-Responsibilities:
-- Extract the current execution snapshot for context building
-- Reset per-turn planning fields at the start of each new turn
-- Track execution metrics
-"""
 import time
 from typing import Any, Dict, Optional
 
@@ -64,9 +52,6 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "reflection_passed": None,
         "reflection_feedback": "",
         "ranked_results": None,
-        # Clear stale tool result fields so previous turn data doesn't bleed in
-        # NOTE: search_results, availability, fare, saved_passengers are intentionally
-        # kept across turns so the planner can skip re-fetching them for booking flow.
         "booking": None,
         "reminders": None,
         "execution_metrics": ExecutionMetrics(

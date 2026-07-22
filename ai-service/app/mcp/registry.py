@@ -1,4 +1,3 @@
-# mcp/registry.py
 import json
 from typing import Any, Dict, Optional
 
@@ -44,13 +43,11 @@ class MCPToolRegistry:
         properties = input_schema.get("properties", {})
         required_fields = input_schema.get("required", [])
 
-        # Filter out keys not defined in schema properties (if properties exist)
         if properties:
             cleaned_args = {k: v for k, v in arguments.items() if k in properties}
         else:
             cleaned_args = dict(arguments)
 
-        # Check for missing required parameters
         missing = [field for field in required_fields if field not in cleaned_args]
         if missing:
             return cleaned_args, f"Missing required parameter(s) for '{tool_name}': {', '.join(missing)}"
@@ -82,7 +79,6 @@ class MCPToolRegistry:
                 "message": f"Tool '{tool_name}' is not registered on the MCP server.",
             })
 
-        # Clean and validate parameters
         cleaned_args, error_msg = self._clean_and_validate_args(tool_name, arguments)
         if error_msg:
             app_logger.warning("Tool parameter error | tool={tool} | error={err}", tool=tool_name, err=error_msg)

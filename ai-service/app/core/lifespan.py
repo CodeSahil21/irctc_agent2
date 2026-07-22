@@ -59,7 +59,6 @@ async def lifespan(app: FastAPI):
     project_name = settings.langsmith_project.strip('"')
     endpoint = settings.langsmith_endpoint
 
-    # 1. Configure LangSmith tracing environment variables
     if tracing_enabled and api_key:
         os.environ["LANGSMITH_TRACING"] = "true"
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -70,17 +69,14 @@ async def lifespan(app: FastAPI):
     else:
         app_logger.warning("LangSmith tracing is DISABLED (missing API key or tracing flag is false).")
 
-    # 2. Initialize Anthropic client — wrap once here if tracing enabled
     raw_client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     traced_client = wrap_anthropic(raw_client) if (tracing_enabled and api_key) else raw_client
 
-    # 3. Build ClaudeService once and store on app.state for reuse across all requests
     app.state.claude_service = ClaudeService(
         client=traced_client,
         default_model=settings.anthropic_default_model,
     )
 
-    # 4. Initialize MCP transport, client, discovery, and registry
     transport = MCPTransport(
         base_url=settings.mcp_server_url,
         timeout=settings.mcp_server_timeout,
@@ -95,19 +91,16 @@ async def lifespan(app: FastAPI):
     app.state.mcp_registry = MCPToolRegistry(client=mcp_client, discovery=discovery)
     app_logger.info("MCP registry ready | tools={count}", count=discovery.tool_count)
 
-    # 5. Initialize shared Motor client + database (Phase 9)
     mongo_client = create_mongo_client(settings.mongo_url)
     db = get_db(mongo_client, settings.mongo_db)
     app.state.mongo_client = mongo_client
     app.state.db = db
 
-    # Create indexes for all collections
     await conv_indexes(db)
     await pref_indexes(db)
     await exec_indexes(db)
     app_logger.info("MongoDB collections and indexes ready | db={db}", db=settings.mongo_db)
 
-    # 6. Initialize checkpointer — uses its own sync pymongo client
     checkpointer = get_checkpointer(
         mongo_url=settings.mongo_url,
         mongo_db=settings.mongo_db,
@@ -115,7 +108,6 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer = checkpointer
     app_logger.info("Checkpointer initialized (MongoDBSaver)")
 
-    # 7. Compile the LangGraph agent with checkpointer
     app.state.agent_graph = create_agent_graph(
         claude_service=app.state.claude_service,
         mcp_registry=app.state.mcp_registry,
@@ -123,14 +115,12 @@ async def lifespan(app: FastAPI):
     )
     app_logger.info("Agent graph compiled successfully.")
 
-    # 8. Init ConversationManager (Phase 10)
     app.state.conversation_manager = ConversationManager(
         db=db,
         claude_service=app.state.claude_service,
     )
     app_logger.info("ConversationManager initialized.")
 
-    # 9. Wire Socket.IO event handlers (Phase 13)
     _make_manager(
         agent_graph=app.state.agent_graph,
         conv_manager=app.state.conversation_manager,
@@ -145,7 +135,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Flush LangSmith traces on shutdown
     app_logger.info("Cleaning up resources for {app_name}...", app_name=settings.app_name)
     if tracing_enabled and api_key:
         try:
@@ -155,16 +144,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             app_logger.error("Error flushing LangSmith traces: {error}", error=str(e))
 
-    # Disconnect MCP client
+
     await mcp_client.disconnect()
 
-    # Close shared Motor client (covers both checkpointer and db)
     mongo_client.close()
 
-    # Close checkpointer's dedicated pymongo client
     if hasattr(app.state.checkpointer, "client"):
         app.state.checkpointer.client.close()
 
-    # Close Anthropic HTTP connection pool
     await app.state.claude_service.close()
     app_logger.info("Shutdown complete.")

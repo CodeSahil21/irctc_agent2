@@ -1,15 +1,3 @@
-# memory/checkpoints.py
-"""
-Phase 8 — LangGraph MongoDB Checkpointing
-
-Uses langgraph-checkpoint-mongodb (MongoDBSaver) for durable,
-cross-restart state persistence.
-
-Enables:
-  - Multi-turn state persistence across HTTP requests (same thread_id)
-  - Interrupt + resume flows (human approval, slot filling mid-flight)
-  - State restoration after server restarts
-"""
 from pymongo import MongoClient
 from langgraph.checkpoint.mongodb import MongoDBSaver
 

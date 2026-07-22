@@ -1,10 +1,7 @@
-# graph/edges.py
 from app.graph.state import TravelState
 
-# Intents that need no tools — answered directly from static knowledge or simple lookup
 _NO_TOOL_INTENTS = {"general_question", "list_classes", "list_quotas"}
 
-# Intents that produce ranked search results
 _RANKING_INTENTS = {"search_trains", "recommend_trains"}
 
 
@@ -47,7 +44,6 @@ def route_after_tool_executor(state: TravelState) -> str:
     if current_index < len(tool_plan):
         return "tool_executor_node"
 
-    # All tools done — rank if applicable, else reflect or respond
     intent = state.get("intent") or ""
     if intent in _RANKING_INTENTS and state.get("search_results"):
         return "ranking_node"
@@ -65,7 +61,6 @@ def route_after_ranking(state: TravelState) -> str:
 def route_after_reflection(state: TravelState) -> str:
     if state.get("reflection_passed"):
         return "response_node"
-    # Hard cap: if we've already retried once, stop regardless
     if (state.get("reflection_retries") or 0) >= 1:
         return "response_node"
     return "tool_planner_node"

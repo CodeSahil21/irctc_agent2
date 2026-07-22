@@ -1,8 +1,3 @@
-# app/types/chat.py
-"""
-Helpers for building Socket.IO message payloads that match
-the frontend ChatMessage type exactly.
-"""
 import time
 from typing import Any, Dict
 

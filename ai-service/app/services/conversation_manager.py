@@ -1,18 +1,3 @@
-# services/conversation_manager.py
-"""
-Phase 10 — Conversation Manager
-
-Owns the full conversation lifecycle:
-
-  open()         — load or create conversation + hydrate memory
-  build_context()— assemble Claude context from DB history + summary + prefs
-  save_turn()    — persist user msg, assistant reply, execution log
-  summarize()    — generate rolling summary when turn count hits threshold
-  close()        — flush preferences to DB
-
-The agent endpoint calls open() before the graph runs and save_turn() after.
-summarize() is called automatically inside save_turn() every N turns.
-"""
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -32,7 +17,6 @@ from app.db.repositories.execution_repo import save_execution_log
 from app.memory.preference_memory import load_preferences_from_db, persist_preferences
 from app.telemetry.logging import app_logger
 
-# Summarize every N turns to keep context compact
 _SUMMARIZE_EVERY = 10
 
 
@@ -41,7 +25,6 @@ class ConversationManager:
         self._db = db
         self._claude = claude_service  # optional — only needed for summarization
 
-    # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def open(
         self,
@@ -113,7 +96,6 @@ class ConversationManager:
             "turn_count": conv.get("turn_count", 0),
         }
 
-    # ── Persistence ───────────────────────────────────────────────────
 
     async def save_turn(
         self,
@@ -182,7 +164,6 @@ class ConversationManager:
                 ),
             )
 
-            # Auto-summarize every N turns
             turn_count = result.get("turn_count") or 0
             if turn_count > 0 and turn_count % _SUMMARIZE_EVERY == 0:
                 await self.summarize(conversation_id)
@@ -191,7 +172,6 @@ class ConversationManager:
             # Persistence must never break the agent response
             app_logger.error("save_turn failed: {error}", error=str(e), exc_info=True)
 
-    # ── Summarization ─────────────────────────────────────────────────
 
     async def summarize(self, conversation_id: str) -> Optional[str]:
         """

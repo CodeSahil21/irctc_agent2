@@ -1,4 +1,3 @@
-# db/repositories/preference_repo.py
 from datetime import datetime, timezone
 from typing import Optional
 

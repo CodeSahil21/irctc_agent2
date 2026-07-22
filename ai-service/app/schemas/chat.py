@@ -52,7 +52,7 @@ class ChatRequest(BaseModel):
     max_tokens: int = Field(
         default=1000,
         gt=0,
-        le=8192,  # Increased from 4096 to support newer high-output models
+        le=8192, 
         description="Maximum tokens to generate (up to 8192).",
     )
 
@@ -105,14 +105,9 @@ class AgentRequest(BaseModel):
     user_email: Optional[str] = Field(default=None, description="User email for MCP auth.")
     user_name: Optional[str] = Field(default=None)
 
-    # Phase 8 — interrupt resume
-    # Set to True when the client is responding to a human-approval interrupt.
-    # The graph will resume from the checkpoint rather than re-invoking from scratch.
     resume: Optional[bool] = Field(default=False, description="Resume a paused interrupt.")
-    # Value passed back to the interrupt (e.g. True = approved, False = rejected)
     resume_value: Optional[bool] = Field(default=None, description="Approval decision for interrupt resume.")
 
-    # Carry-forward travel state from previous turns (client echoes back what server returned)
     travel_context: Optional[dict] = Field(default=None)
     search_results: Optional[list] = Field(default=None)
     selected_train: Optional[dict] = Field(default=None)

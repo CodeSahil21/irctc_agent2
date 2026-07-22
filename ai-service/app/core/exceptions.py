@@ -38,11 +38,6 @@ class ValidationException(BaseAPIException):
             details=details,
         )
 
-
-# =====================================================================
-# Claude / Model Provider Exceptions
-# =====================================================================
-
 class ModelProviderException(BaseAPIException):
     """Raised when the LLM provider encounters an internal or upstream error."""
 

@@ -1,25 +1,9 @@
-# memory/preference_memory.py
-"""
-Layer 3 — User Preference Memory
-
-Write-through cache: reads/writes hit the in-process dict first for
-sync access inside graph nodes, and persist to MongoDB asynchronously.
-
-Sync helpers (get_preferences, merge_preferences_into_travel, preferences_summary)
-are called from intent_node — they use the in-process cache.
-
-Async helpers (load_preferences_from_db, persist_preferences) are called
-from lifespan / conversation manager to hydrate and flush the cache.
-"""
 from typing import Dict, Optional
 
 from app.graph.state import UserPreferences
 
-# In-process write-through cache: user_email → UserPreferences
 _cache: Dict[str, UserPreferences] = {}
 
-
-# ── Sync (used inside graph nodes) ───────────────────────────────────────────
 
 def get_preferences(user_email: str) -> UserPreferences:
     return dict(_cache.get(user_email, {}))
@@ -54,8 +38,6 @@ def preferences_summary(prefs: UserPreferences) -> str:
         parts.append("Senior citizen: yes")
     return ", ".join(parts)
 
-
-# ── Async (used by conversation manager / lifespan) ──────────────────────────
 
 async def load_preferences_from_db(db, user_email: str) -> UserPreferences:
     """Load preferences from MongoDB into the in-process cache."""

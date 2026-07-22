@@ -1,8 +1,3 @@
-"""
-Motor async MongoDB client.
-Initialized once in lifespan.py and stored on app.state.
-get_db() is used by repositories to get the database handle.
-"""
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 

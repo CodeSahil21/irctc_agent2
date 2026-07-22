@@ -1,4 +1,3 @@
-# db/repositories/conversation_repo.py
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -12,7 +11,6 @@ _MESSAGES = "messages"
 
 async def upsert_conversation(db: AsyncIOMotorDatabase, doc: ConversationDoc) -> None:
     data = doc.model_dump()
-    # Never overwrite summary or turn_count via upsert — those have dedicated updaters
     safe_set = {k: v for k, v in data.items() if k not in ("summary", "turn_count", "created_at")}
     safe_set["updated_at"] = datetime.now(timezone.utc)
     await db[_CONVERSATIONS].update_one(

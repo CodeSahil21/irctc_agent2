@@ -1,4 +1,3 @@
-# mcp/exceptions.py
 
 
 class MCPError(Exception):

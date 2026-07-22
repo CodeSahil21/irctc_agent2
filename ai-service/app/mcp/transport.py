@@ -1,4 +1,3 @@
-# app/mcp/transport.py
 import json
 import httpx
 from typing import Any, Dict, Optional
@@ -95,8 +94,6 @@ class MCPTransport:
         try:
             text = response.text.strip()
 
-            # Collect all SSE data: lines and join them to reconstruct
-            # the full JSON payload (which may be split across multiple lines)
             data_lines = []
             for line in text.splitlines():
                 line = line.strip()

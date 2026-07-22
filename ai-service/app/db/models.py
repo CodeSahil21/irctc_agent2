@@ -1,13 +1,3 @@
-# db/models.py
-"""
-MongoDB document models for Phase 9 persistence.
-
-Collections:
-  conversations       — one doc per conversation session
-  messages            — one doc per message turn
-  user_preferences    — one doc per user (upserted)
-  execution_logs      — one doc per agent turn (tool history + metrics)
-"""
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -29,8 +19,8 @@ class ConversationDoc(BaseModel):
     conversation_id: str
     user_email: str
     user_name: Optional[str] = None
-    title: Optional[str] = None      # first user message (truncated)
-    summary: Optional[str] = None    # rolling Claude-generated summary
+    title: Optional[str] = None      
+    summary: Optional[str] = None    
     turn_count: int = 0
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

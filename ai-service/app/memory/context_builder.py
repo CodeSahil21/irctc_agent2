@@ -1,17 +1,3 @@
-# memory/context_builder.py
-"""
-Context Builder
-
-Assembles the Claude context from all three memory layers:
-  Layer 1 — Working Memory  (current goal, tool state, results)
-  Layer 2 — Conversation    (windowed messages — handled separately by nodes)
-  Layer 3 — Preferences     (user preferences summary)
-
-Instead of dumping 200 messages + all state as raw JSON,
-we build a structured, token-efficient context block.
-
-Used by: response_node, tool_planner_node
-"""
 import json
 from typing import Any, Dict, Optional
 

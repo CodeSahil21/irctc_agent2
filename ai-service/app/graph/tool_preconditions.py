@@ -1,4 +1,3 @@
-# graph/tool_preconditions.py
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -16,7 +15,6 @@ class ToolPrecondition:
     timeout_seconds: float = 15.0
 
 
-# Maps tool name → precondition config
 TOOL_PRECONDITIONS: Dict[str, ToolPrecondition] = {
     # ── Public / Search ───────────────────────────────────────────────
     "search_trains": ToolPrecondition(

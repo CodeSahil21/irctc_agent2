@@ -1,4 +1,3 @@
-# api/conversations.py
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import get_conversation_manager

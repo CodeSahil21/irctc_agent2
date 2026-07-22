@@ -21,7 +21,6 @@ class ClaudeService:
         client: AsyncAnthropic,
         default_model: str = "claude-haiku-4-5",
     ) -> None:
-        # Client is accepted as-is — wrapping (e.g. LangSmith) is done once in lifespan.py
         self.client = client
         self.default_model = default_model
 
@@ -48,8 +47,6 @@ class ClaudeService:
         }
 
         if system:
-            # Prompt caching: wrap static system prompts as a content block with cache_control
-            # so Claude reuses the KV cache across repeated calls with the same system prompt.
             if cache_system:
                 params["system"] = [
                     {

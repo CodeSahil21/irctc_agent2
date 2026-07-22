@@ -1,10 +1,8 @@
-# mcp/discovery.py
 from typing import Any, Dict, List, Optional
 
 from app.mcp.client import MCPClient
 from app.telemetry.logging import app_logger
 
-# Discovery uses a system-level probe user — no real user data is sent
 _PROBE_EMAIL = "system@irctc-agent.internal"
 
 
@@ -28,7 +26,6 @@ class MCPDiscovery:
         """
         raw_tools = await self._client.list_tools(user_email=_PROBE_EMAIL)
 
-        # Normalize and sanitize tool definitions for Anthropic compatibility
         self._tools = [self._normalize_tool(t) for t in raw_tools]
         self._by_name = {t["name"]: t for t in self._tools}
 

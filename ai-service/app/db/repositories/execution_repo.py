@@ -1,4 +1,3 @@
-# db/repositories/execution_repo.py
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.db.models import ExecutionLogDoc

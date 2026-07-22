@@ -1,4 +1,3 @@
-# app/mcp/client.py
 import asyncio
 import time
 from typing import Any, Dict, List, Optional
@@ -15,10 +14,9 @@ from app.mcp.session import MCPSession
 from app.mcp.transport import MCPTransport
 from app.telemetry.logging import app_logger
 
-# Max retries for transient failures
 _MAX_RETRIES = 3
-_RETRY_BACKOFF = [0.5, 1.0, 2.0]  # seconds
-_MCP_PROTOCOL_VERSION = "2024-11-05"  # Standardized protocol version
+_RETRY_BACKOFF = [0.5, 1.0, 2.0] 
+_MCP_PROTOCOL_VERSION = "2024-11-05"  
 
 
 class MCPClient:
@@ -38,7 +36,6 @@ class MCPClient:
         self._sessions: Dict[str, MCPSession] = {}
         self._request_counter: int = 0
 
-    # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def connect(self) -> None:
         await self._transport.connect()
@@ -52,7 +49,6 @@ class MCPClient:
         await self._transport.disconnect()
         app_logger.info("MCPClient disconnected")
 
-    # ── Session Management ────────────────────────────────────────────
 
     def _get_or_create_session(self, user_email: str, user_name: Optional[str]) -> MCPSession:
         if user_email not in self._sessions:
@@ -74,7 +70,6 @@ class MCPClient:
     def get_session_health(self) -> List[Dict[str, Any]]:
         return [s.health_summary() for s in self._sessions.values()]
 
-    # ── Tool Discovery ────────────────────────────────────────────────
 
     async def list_tools(self, user_email: str, user_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -89,8 +84,6 @@ class MCPClient:
         tools = result.get("tools", [])
         app_logger.info("MCPClient listed {count} tools", count=len(tools))
         return tools
-
-    # ── Tool Execution ────────────────────────────────────────────────
 
     async def call_tool(
         self,
@@ -186,7 +179,6 @@ class MCPClient:
             tool_name=tool_name,
         )
 
-    # ── Internal ──────────────────────────────────────────────────────
 
     async def _raw_send(
         self,
@@ -228,7 +220,6 @@ class MCPClient:
         if not session.session_id:
             app_logger.warning("MCP initialize response did not set mcp-session-id header | user={user}", user=user_email)
 
-        # Notify the server initialization is complete (JSON-RPC notification - NO id field)
         initialized_notification = {
             "jsonrpc": "2.0",
             "method": "notifications/initialized",

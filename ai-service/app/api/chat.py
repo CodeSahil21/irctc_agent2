@@ -20,7 +20,7 @@ router = APIRouter()
     summary="Send a message to Claude (Non-streaming)",
     description="Validates input, sends conversation history to ChatService, and returns a JSON response.",
 )
-# 2. Add @traceable decorator to trace the sync endpoint
+
 @traceable(name="POST /chat", run_type="chain")
 async def create_chat_completion(
     request: ChatRequest,
@@ -76,8 +76,6 @@ async def stream_chat_completion(
                 if request.conversation_history
                 else None
             )
-
-            # Stream tokens directly as they arrive from ChatService
             async for token in chat_service.stream_message(
                 message=message,
                 conversation_history=history_dicts,
@@ -85,7 +83,6 @@ async def stream_chat_completion(
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
             ):
-                # Send JSON-encoded frame (handles newlines & quotes cleanly)
                 payload = json.dumps({"content": token})
                 yield f"data: {payload}\n\n"
 
@@ -104,7 +101,7 @@ async def stream_chat_completion(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disables nginx proxy buffering
+            "X-Accel-Buffering": "no",  
         },
     )
 
@@ -153,8 +150,7 @@ async def run_agent(
     except Exception as e:
         app_logger.error("Agent graph error: {error}", error=str(e), exc_info=True)
         raise
-
-    # Extract last AI message
+    
     messages = result.get("messages", [])
     reply = ""
     for msg in reversed(messages):
@@ -162,7 +158,6 @@ async def run_agent(
             reply = str(msg.content)
             break
 
-    # Phase 10 — save turn + close (flush prefs)
     if request.user_email and not request.resume:
         await conv_manager.save_turn(
             conversation_id=conversation_id,
