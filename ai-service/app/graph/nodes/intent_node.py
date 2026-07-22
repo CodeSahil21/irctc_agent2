@@ -39,6 +39,8 @@ _INTENT_TOOL = {
         },
         "required": ["intent", "user_goal"],
     },
+    # Cache this tool schema — it is static and large (enum list never changes)
+    "cache_control": {"type": "ephemeral"},
 }
 
 _SYSTEM = (
@@ -58,6 +60,7 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
         tool_choice={"type": "tool", "name": "classify_intent"},
         temperature=0.0,
         max_tokens=512,
+        cache_system=True,
     )
 
     tool_input: Dict[str, Any] = {}

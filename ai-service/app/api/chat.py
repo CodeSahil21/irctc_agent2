@@ -1,6 +1,6 @@
 import json
 from typing import Any
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langsmith import traceable
@@ -29,6 +29,10 @@ async def create_chat_completion(
     """
     HTTP Request -> Validate Request -> Call Service -> Return JSON Response
     """
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message cannot be empty.")
+
     history_dicts = (
         [msg.model_dump() for msg in request.conversation_history]
         if request.conversation_history
@@ -36,7 +40,7 @@ async def create_chat_completion(
     )
 
     return await chat_service.send_message(
-        message=request.message,
+        message=message,
         conversation_id=request.conversation_id,
         conversation_history=history_dicts,
         system_prompt=request.system_prompt,
@@ -63,6 +67,10 @@ async def stream_chat_completion(
 
     async def event_generator():
         try:
+            message = request.message.strip()
+            if not message:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message cannot be empty.")
+
             history_dicts = (
                 [msg.model_dump() for msg in request.conversation_history]
                 if request.conversation_history
@@ -71,7 +79,7 @@ async def stream_chat_completion(
 
             # Stream tokens directly as they arrive from ChatService
             async for token in chat_service.stream_message(
-                message=request.message,
+                message=message,
                 conversation_history=history_dicts,
                 system_prompt=request.system_prompt,
                 temperature=request.temperature,

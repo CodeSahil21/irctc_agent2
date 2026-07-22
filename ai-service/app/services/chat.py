@@ -44,8 +44,11 @@ class ChatService:
         **kwargs: Any,
     ) -> ChatResponse:
         """Sends a message, captures SDK response metadata, and returns a ChatResponse schema."""
+        if not message or not message.strip():
+            raise ValueError("message cannot be empty")
+
         messages = self._normalize_history(conversation_history)
-        messages.append({"role": "user", "content": message})
+        messages.append({"role": "user", "content": message.strip()})
 
         app_logger.debug(
             "ChatService processing | message_count={count}",
@@ -90,8 +93,11 @@ class ChatService:
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Streams text chunks token-by-token."""
+        if not message or not message.strip():
+            raise ValueError("message cannot be empty")
+
         messages = self._normalize_history(conversation_history)
-        messages.append({"role": "user", "content": message})
+        messages.append({"role": "user", "content": message.strip()})
 
         app_logger.debug(
             "ChatService streaming | message_count={count}",

@@ -60,6 +60,9 @@ class TravelState(TypedDict):
     booking: Optional[Dict[str, Any]]
     reminders: Optional[List[Dict[str, Any]]]
     saved_passengers: Optional[List[Dict[str, Any]]]
+    # Generic bucket for tool results not covered by dedicated fields
+    # (route, seat_map, live_status, platform, schedule, stations, etc.)
+    tool_results: Optional[Dict[str, Any]]
 
     # ── Slot Filling ──────────────────────────────────────────────────
     missing_slots: Optional[List[str]]

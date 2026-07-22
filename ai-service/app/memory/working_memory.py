@@ -59,6 +59,7 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "retries": 0,
         # Phase 12 — clear per-turn advanced features
         "parallel_results": {},
+        "tool_results": {},
         "reflection_required": None,
         "reflection_passed": None,
         "reflection_feedback": "",

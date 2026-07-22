@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     langsmith_api_key: Optional[str] = Field(None, alias="LANGSMITH_API_KEY")
     langsmith_project: str = Field("default", alias="LANGSMITH_PROJECT")
 
+    # JWT (shared secret with auth-service for cookie verification)
+    jwt_secret: str = Field("change-me", alias="JWT_SECRET")
+    jwt_algorithm: str = Field("HS256", alias="JWT_ALGORITHM")
+
     # MCP Server
     mcp_server_url: str = Field("http://localhost:3000", alias="MCP_SERVER_URL")
     mcp_server_timeout: float = Field(30.0, alias="MCP_SERVER_TIMEOUT")

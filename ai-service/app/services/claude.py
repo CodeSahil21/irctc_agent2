@@ -34,6 +34,7 @@ class ClaudeService:
         temperature: float = 0.7,
         stop_sequences: Optional[List[str]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        cache_system: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Executes a message request with latency tracking and token telemetry."""
@@ -47,7 +48,18 @@ class ClaudeService:
         }
 
         if system:
-            params["system"] = system
+            # Prompt caching: wrap static system prompts as a content block with cache_control
+            # so Claude reuses the KV cache across repeated calls with the same system prompt.
+            if cache_system:
+                params["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                params["system"] = system
         if stop_sequences:
             params["stop_sequences"] = stop_sequences
         if tools:

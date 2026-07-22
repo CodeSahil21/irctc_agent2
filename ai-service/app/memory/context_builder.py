@@ -38,6 +38,10 @@ def build_tool_context(state: TravelState) -> str:
         parts.append(f"Reminders:\n{json.dumps(state['reminders'], indent=2)}")
     if state.get("saved_passengers"):
         parts.append(f"Saved passengers:\n{json.dumps(state['saved_passengers'], indent=2)}")
+    if state.get("tool_results"):
+        for tool_name, result in state["tool_results"].items():
+            label = tool_name.replace("_", " ").title()
+            parts.append(f"{label}:\n{json.dumps(result, indent=2)}")
     if state.get("errors"):
         parts.append("Errors encountered:\n" + "\n".join(state["errors"]))
     if state.get("pending_question"):
@@ -73,6 +77,9 @@ def build_planner_context(state: TravelState, tools_summary: str) -> str:
         parts.append("Fare: already fetched")
     if state.get("passengers"):
         parts.append(f"Passengers: {len(state['passengers'])} passenger(s) ready")
+    if state.get("tool_results"):
+        done = ", ".join(state["tool_results"].keys())
+        parts.append(f"Already executed (results cached): {done}")
 
     # User preferences
     prefs = state.get("user_preferences") or {}

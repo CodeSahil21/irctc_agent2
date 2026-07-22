@@ -100,7 +100,7 @@ class ChatResponse(BaseModel):
 class AgentRequest(BaseModel):
     """Payload for POST /agent — runs the full LangGraph agent."""
 
-    message: str = Field(..., min_length=1, description="The user's message.")
+    message: str = Field(default="", description="The user's message. Empty string is valid for resume calls.")
     conversation_id: Optional[str] = Field(default=None)
     user_email: Optional[str] = Field(default=None, description="User email for MCP auth.")
     user_name: Optional[str] = Field(default=None)

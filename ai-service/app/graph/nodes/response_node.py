@@ -48,6 +48,7 @@ async def response_node(state: TravelState, claude_service: ClaudeService) -> Di
         system=_SYSTEM,
         temperature=0.7,
         max_tokens=2048,
+        cache_system=True,
     )
 
     reply = "".join(

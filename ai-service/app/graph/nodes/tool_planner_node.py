@@ -60,6 +60,17 @@ async def tool_planner_node(
     mcp_registry: MCPToolRegistry = None,
 ) -> Dict[str, Any]:
     available_tools = mcp_registry.get_schemas_for_claude() if mcp_registry else []
+
+    # Add cache_control to the last tool in the list so Claude caches the entire
+    # tool block (all tools up to and including the marked one are cached together).
+    # The MCP tool list is static per-startup — ideal for caching.
+    tools_for_claude = [_PLAN_TOOL]
+    if available_tools:
+        cached_tools = [dict(t) for t in available_tools]
+        cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+        tools_for_claude = [_PLAN_TOOL] + cached_tools
+
+    # Build a compact tools summary for the context message (names + descriptions only)
     tools_summary = json.dumps(
         [{"name": t["name"], "description": t.get("description", "")} for t in available_tools],
         indent=2,
@@ -74,10 +85,11 @@ async def tool_planner_node(
     response = await claude_service.chat_raw(
         messages=[{"role": "user", "content": full_context}],
         system=_SYSTEM,
-        tools=[_PLAN_TOOL],
+        tools=tools_for_claude,
         tool_choice={"type": "tool", "name": "create_tool_plan"},
         temperature=0.0,
         max_tokens=1024,
+        cache_system=True,
     )
 
     steps: List[Dict[str, Any]] = []

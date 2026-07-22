@@ -1,4 +1,5 @@
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from anthropic import AsyncAnthropic
@@ -20,6 +21,29 @@ from app.services.claude import ClaudeService
 from app.services.conversation_manager import ConversationManager
 from app.telemetry.logging import app_logger
 from app.websocket.manager import _make_manager
+
+
+async def _discover_tools_with_retry(discovery: MCPDiscovery, attempts: int = 5) -> None:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            await discovery.discover()
+            if discovery.has_tools():
+                return
+        except Exception as exc:
+            last_error = exc
+            app_logger.warning(
+                "MCP discovery attempt failed | attempt={attempt} | error={error}",
+                attempt=attempt + 1,
+                error=str(exc),
+            )
+        if attempt < attempts - 1:
+            await asyncio.sleep(min(0.5 * (attempt + 1), 2.0))
+
+    if not discovery.has_tools():
+        app_logger.warning(
+            "MCP discovery finished with no tools; continuing startup and relying on lazy refresh",
+        )
 
 
 @asynccontextmanager
@@ -65,7 +89,7 @@ async def lifespan(app: FastAPI):
     await mcp_client.connect()
 
     discovery = MCPDiscovery(client=mcp_client)
-    await discovery.discover()
+    await _discover_tools_with_retry(discovery)
 
     app.state.mcp_client = mcp_client
     app.state.mcp_registry = MCPToolRegistry(client=mcp_client, discovery=discovery)
@@ -83,14 +107,13 @@ async def lifespan(app: FastAPI):
     await exec_indexes(db)
     app_logger.info("MongoDB collections and indexes ready | db={db}", db=settings.mongo_db)
 
-    # 6. Initialize checkpointer — reuses the same Motor client
-    checkpointer = await get_checkpointer(
+    # 6. Initialize checkpointer — uses its own sync pymongo client
+    checkpointer = get_checkpointer(
         mongo_url=settings.mongo_url,
         mongo_db=settings.mongo_db,
-        client=mongo_client,
     )
     app.state.checkpointer = checkpointer
-    app_logger.info("Checkpointer initialized (AsyncMongoDBSaver)")
+    app_logger.info("Checkpointer initialized (MongoDBSaver)")
 
     # 7. Compile the LangGraph agent with checkpointer
     app.state.agent_graph = create_agent_graph(
@@ -137,6 +160,10 @@ async def lifespan(app: FastAPI):
 
     # Close shared Motor client (covers both checkpointer and db)
     mongo_client.close()
+
+    # Close checkpointer's dedicated pymongo client
+    if hasattr(app.state.checkpointer, "client"):
+        app.state.checkpointer.client.close()
 
     # Close Anthropic HTTP connection pool
     await app.state.claude_service.close()

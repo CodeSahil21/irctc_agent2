@@ -1,5 +1,5 @@
 # websocket/connections.py
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -9,6 +9,8 @@ class SocketSession:
     conversation_id: Optional[str] = None
     user_email: Optional[str] = None
     user_name: Optional[str] = None
+    pending_user_message: Optional[str] = None
+    pending_message_id: Optional[str] = None
 
 
 # sid → SocketSession

@@ -29,6 +29,8 @@ class MCPTransport:
         self._client: Optional[httpx.AsyncClient] = None
 
     async def connect(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self._timeout,
@@ -37,10 +39,13 @@ class MCPTransport:
         app_logger.info("MCPTransport connected | base_url={url}", url=self.base_url)
 
     async def disconnect(self) -> None:
-        if self._client:
+        if not self._client:
+            return
+        try:
             await self._client.aclose()
-            self._client = None
             app_logger.info("MCPTransport disconnected")
+        finally:
+            self._client = None
 
     async def send(
         self,
@@ -85,7 +90,7 @@ class MCPTransport:
 
         try:
             body = response.json()
-        except Exception as e:
+        except (ValueError, Exception) as e:
             raise MCPInvalidResponseError(f"Non-JSON response from MCP server: {e}") from e
 
         returned_session_id = response.headers.get("mcp-session-id")
@@ -97,5 +102,5 @@ class MCPTransport:
             return
         try:
             await self._client.request("DELETE", "/mcp", headers={"mcp-session-id": session_id})
-        except Exception:
-            pass  # Best-effort cleanup
+        except httpx.HTTPError as exc:
+            app_logger.warning("MCP session cleanup failed | session_id={session_id} | error={error}", session_id=session_id, error=str(exc))

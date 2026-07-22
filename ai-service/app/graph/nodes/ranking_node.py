@@ -33,8 +33,8 @@ def _parse_duration(duration_str: Optional[str]) -> int:
         if ":" in duration_str:
             h, m = duration_str.split(":")
             return int(h) * 60 + int(m)
-    except Exception:
-        pass
+    except (ValueError, IndexError) as exc:
+        app_logger.debug("Failed to parse train duration: {error}", error=str(exc))
     return 99999
 
 

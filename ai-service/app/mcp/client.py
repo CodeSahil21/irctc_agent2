@@ -18,6 +18,7 @@ from app.telemetry.logging import app_logger
 # Max retries for transient failures
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = [0.5, 1.0, 2.0]  # seconds
+_MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
 class MCPClient:
@@ -80,6 +81,7 @@ class MCPClient:
         Call tools/list on the MCP server and return the raw tool schema list.
         Used once at startup by MCPDiscovery.
         """
+        await self._ensure_initialized(user_email, user_name)
         payload = {"jsonrpc": "2.0", "id": self._next_id(), "method": "tools/list", "params": {}}
         body, _ = await self._raw_send(payload, user_email, user_name)
 
@@ -111,6 +113,7 @@ class MCPClient:
         last_error: Optional[Exception] = None
 
         for attempt in range(_MAX_RETRIES):
+            await self._ensure_initialized(user_email, user_name)
             start = time.perf_counter()
             try:
                 body, _ = await self._raw_send(payload, user_email, user_name)
@@ -201,6 +204,26 @@ class MCPClient:
         if new_session_id:
             session.session_id = new_session_id
         return body, new_session_id
+
+    async def _ensure_initialized(self, user_email: str, user_name: Optional[str]) -> None:
+        session = self._get_or_create_session(user_email, user_name)
+        if session.session_id:
+            return
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": _MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "ai-service",
+                    "version": "1.0.0",
+                },
+            },
+        }
+        await self._raw_send(payload, user_email, user_name)
 
     def _next_id(self) -> int:
         self._request_counter += 1

@@ -72,6 +72,7 @@ async def reflection_node(state: TravelState, claude_service: ClaudeService) -> 
             tool_choice={"type": "tool", "name": "reflect_on_results"},
             temperature=0.0,
             max_tokens=256,
+            cache_system=True,
         )
 
         tool_input: Dict[str, Any] = {}

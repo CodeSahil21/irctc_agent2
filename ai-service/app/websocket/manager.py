@@ -27,7 +27,10 @@ import nanoid
 import socketio
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
+from langsmith import traceable
 
+from app.auth.jwt import extract_user_from_token
+from app.config.settings import get_settings
 from app.websocket import events
 from app.websocket.connections import create_session, get_session, remove_session
 from app.telemetry.logging import app_logger
@@ -35,7 +38,7 @@ from app.telemetry.logging import app_logger
 # Shared AsyncServer — imported by main.py to mount
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*",
+    cors_allowed_origins=["http://localhost:3001", "http://localhost:3000"],
     logger=False,
     engineio_logger=False,
 )
@@ -50,21 +53,43 @@ def _make_manager(agent_graph, conv_manager):
     @sio.event
     async def connect(sid, environ, auth):
         session = create_session(sid)
-        # auth payload: {conversationId, userEmail, userName}
-        if auth:
-            session.conversation_id = auth.get("conversationId") or f"conv-{sid[:8]}"
-            session.user_email = auth.get("userEmail")
-            session.user_name = auth.get("userName")
-        else:
-            session.conversation_id = f"conv-{sid[:8]}"
-        app_logger.info("Socket connected | sid={sid} | conv={conv}", sid=sid, conv=session.conversation_id)
+        settings = get_settings()
+
+        # Try to extract user from JWT cookie forwarded in auth payload
+        token = (auth or {}).get("token")
+        jwt_email, jwt_name = extract_user_from_token(token, settings.jwt_secret)
+
+        # JWT claims take priority; fall back to explicit auth fields
+        session.conversation_id = (auth or {}).get("conversationId") or f"conv-{sid[:8]}"
+        session.user_email = jwt_email or (auth or {}).get("userEmail")
+        session.user_name = jwt_name or (auth or {}).get("userName")
+
+        app_logger.info(
+            "Socket connected | sid={sid} | conv={conv} | user={user}",
+            sid=sid, conv=session.conversation_id, user=session.user_email,
+        )
 
     @sio.event
     async def disconnect(sid):
         remove_session(sid)
         app_logger.info("Socket disconnected | sid={sid}", sid=sid)
 
+    @traceable(name="socket.stream_chunks", run_type="chain")
+    async def _stream_chunks(sid: str, reply_id: str, reply: str) -> None:
+        chunk_size = 4
+        for i in range(0, len(reply), chunk_size):
+            delta = reply[i:i + chunk_size]
+            await sio.emit(events.MESSAGE_CHUNK, {"id": reply_id, "delta": delta}, to=sid)
+            app_logger.info(
+                "Socket chunk emitted | sid={sid} | message_id={msg_id} | chunk_index={idx}",
+                sid=sid,
+                msg_id=reply_id,
+                idx=i // chunk_size,
+            )
+            await asyncio.sleep(0.01)
+
     @sio.on(events.QUERY_SEND)
+    @traceable(name="socket.query_send", run_type="chain")
     async def on_query_send(sid, data):
         """
         data: {id: str, content: str}
@@ -80,6 +105,8 @@ def _make_manager(agent_graph, conv_manager):
 
         conversation_id = session.conversation_id or f"conv-{sid[:8]}"
         config = {"configurable": {"thread_id": conversation_id}}
+        session.pending_user_message = content
+        session.pending_message_id = msg_id
 
         # Ack immediately
         await sio.emit(events.QUERY_ACK, {"id": msg_id}, to=sid)
@@ -123,10 +150,7 @@ def _make_manager(agent_graph, conv_manager):
 
             # Stream reply as chunks (simulate token streaming from full reply)
             reply_id = nanoid.generate()
-            chunk_size = 4
-            for i in range(0, len(reply), chunk_size):
-                await sio.emit(events.MESSAGE_CHUNK, {"id": reply_id, "delta": reply[i:i + chunk_size]}, to=sid)
-                await asyncio.sleep(0.01)
+            await _stream_chunks(sid, reply_id, reply)
 
             from app.types.chat import build_complete_message
             complete_msg = build_complete_message(
@@ -148,13 +172,19 @@ def _make_manager(agent_graph, conv_manager):
                 )
                 await conv_manager.close(session.user_email)
 
+            session.pending_user_message = None
+            session.pending_message_id = None
+
         except Exception as e:
             app_logger.error("Socket query error: {e}", e=str(e), exc_info=True)
             await sio.emit(events.MESSAGE_ERROR, {"id": msg_id, "error": str(e)}, to=sid)
+            session.pending_user_message = None
+            session.pending_message_id = None
         finally:
             await sio.emit(events.AGENT_TYPING, {"isTyping": False}, to=sid)
 
     @sio.on(events.RESUME)
+    @traceable(name="socket.resume", run_type="chain")
     async def on_resume(sid, data):
         """
         data: {id: str, approved: bool}
@@ -181,14 +211,25 @@ def _make_manager(agent_graph, conv_manager):
                     break
 
             reply_id = nanoid.generate()
-            chunk_size = 4
-            for i in range(0, len(reply), chunk_size):
-                await sio.emit(events.MESSAGE_CHUNK, {"id": reply_id, "delta": reply[i:i + chunk_size]}, to=sid)
-                await asyncio.sleep(0.01)
+            await _stream_chunks(sid, reply_id, reply)
 
             from app.types.chat import build_complete_message
             complete_msg = build_complete_message(msg_id=reply_id, content=reply, result=result)
             await sio.emit(events.MESSAGE_COMPLETE, {"message": complete_msg}, to=sid)
+
+            if session.user_email and session.pending_user_message:
+                await conv_manager.save_turn(
+                    conversation_id=conversation_id,
+                    user_email=session.user_email,
+                    user_message=session.pending_user_message,
+                    assistant_reply=reply,
+                    intent=result.get("intent"),
+                    result=result,
+                )
+                await conv_manager.close(session.user_email)
+
+            session.pending_user_message = None
+            session.pending_message_id = None
 
         except Exception as e:
             app_logger.error("Socket resume error: {e}", e=str(e), exc_info=True)

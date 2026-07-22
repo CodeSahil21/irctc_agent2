@@ -70,6 +70,16 @@ def _apply_result(
                 travel["from_station"] = code
             elif not travel.get("to_station") or len(travel.get("to_station", "")) > 5:
                 travel["to_station"] = code
+        # Always store full result so response_node can show the station name
+        existing = dict(updates.get("tool_results") or {})
+        existing[tool_name] = result_data
+        updates["tool_results"] = existing
+    else:
+        # All other tools: store result in the generic tool_results bucket
+        # so response_node / build_tool_context can surface it to Claude.
+        existing = dict(updates.get("tool_results") or {})
+        existing[tool_name] = result_data
+        updates["tool_results"] = existing
 
 
 async def _execute_parallel_group(

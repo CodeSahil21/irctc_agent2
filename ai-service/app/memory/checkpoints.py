@@ -2,7 +2,7 @@
 """
 Phase 8 — LangGraph MongoDB Checkpointing
 
-Uses langgraph-checkpoint-mongodb (AsyncMongoDBSaver) for durable,
+Uses langgraph-checkpoint-mongodb (MongoDBSaver) for durable,
 cross-restart state persistence.
 
 Enables:
@@ -10,22 +10,21 @@ Enables:
   - Interrupt + resume flows (human approval, slot filling mid-flight)
   - State restoration after server restarts
 """
-from motor.motor_asyncio import AsyncIOMotorClient
-from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver
+from pymongo import MongoClient
+from langgraph.checkpoint.mongodb import MongoDBSaver
 
 
-async def get_checkpointer(
+def get_checkpointer(
     mongo_url: str,
     mongo_db: str,
-    client: AsyncIOMotorClient = None,
-) -> AsyncMongoDBSaver:
+) -> MongoDBSaver:
     """
-    Creates and returns an AsyncMongoDBSaver checkpointer.
-    Pass the existing Motor client from lifespan to share the connection pool.
-    If no client is provided, a new one is created (test/standalone use).
+    Creates and returns a MongoDBSaver checkpointer.
+    Uses a dedicated sync pymongo client (MongoDBSaver requires pymongo, not Motor).
     """
-    if client is None:
-        client = AsyncIOMotorClient(mongo_url)
-    checkpointer = AsyncMongoDBSaver(client, db_name=mongo_db)
-    await checkpointer.asetup()
-    return checkpointer
+    client = MongoClient(mongo_url)
+    try:
+        return MongoDBSaver(client, db_name=mongo_db)
+    except Exception:
+        client.close()
+        raise

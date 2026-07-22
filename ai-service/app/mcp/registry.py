@@ -21,6 +21,13 @@ class MCPToolRegistry:
         self._client = client
         self._discovery = discovery
 
+    async def _ensure_discovery(self) -> None:
+        """Refresh the tool cache if startup discovery missed tools."""
+        if self._discovery.has_tools():
+            return
+        app_logger.warning("Tool cache empty — refreshing MCP discovery")
+        await self._discovery.refresh()
+
     @traceable(name="mcp_execute_tool", run_type="tool")
     async def execute(
         self,
@@ -34,6 +41,11 @@ class MCPToolRegistry:
         Returns a JSON string in the same envelope format as the old execute_tool()
         so tool_executor_node needs minimal changes.
         """
+        await self._ensure_discovery()
+
+        if not self._discovery.is_known(tool_name):
+            await self._discovery.refresh()
+
         if not self._discovery.is_known(tool_name):
             app_logger.warning("Unknown tool requested | tool={tool}", tool=tool_name)
             return json.dumps({
@@ -56,6 +68,8 @@ class MCPToolRegistry:
         Return tool schemas in Anthropic tool-use format.
         Used by tool_planner_node to give Claude the live tool list.
         """
+        # The planner runs after startup, but if discovery raced the MCP server
+        # we still want to recover on the next access rather than planning with an empty set.
         return self._discovery.get_tools()
 
     def is_known(self, tool_name: str) -> bool:
