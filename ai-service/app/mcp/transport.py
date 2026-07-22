@@ -1,4 +1,5 @@
-# mcp/transport.py
+# app/mcp/transport.py
+import json
 import httpx
 from typing import Any, Dict, Optional
 
@@ -34,7 +35,10 @@ class MCPTransport:
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self._timeout,
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
         )
         app_logger.info("MCPTransport connected | base_url={url}", url=self.base_url)
 
@@ -89,9 +93,26 @@ class MCPTransport:
             raise MCPInvalidResponseError(f"MCP server error: HTTP {response.status_code}")
 
         try:
-            body = response.json()
+            text = response.text.strip()
+
+            # Robust SSE parsing for 'data:' lines and 'event:' prefixes
+            extracted = None
+            for line in text.splitlines():
+                line = line.strip()
+                if line.startswith("data:"):
+                    extracted = line[5:].strip()
+                    break
+
+            if extracted:
+                text = extracted
+            elif text.startswith("event:"):
+                text = "\n".join([l for l in text.splitlines() if not l.startswith("event:")]).strip()
+
+            body = json.loads(text)
         except (ValueError, Exception) as e:
-            raise MCPInvalidResponseError(f"Non-JSON response from MCP server: {e}") from e
+            raise MCPInvalidResponseError(
+                f"Non-JSON response from MCP server: {e} | Raw body: {repr(response.text)}"
+            ) from e
 
         returned_session_id = response.headers.get("mcp-session-id")
         return body, returned_session_id
@@ -103,4 +124,8 @@ class MCPTransport:
         try:
             await self._client.request("DELETE", "/mcp", headers={"mcp-session-id": session_id})
         except httpx.HTTPError as exc:
-            app_logger.warning("MCP session cleanup failed | session_id={session_id} | error={error}", session_id=session_id, error=str(exc))
+            app_logger.warning(
+                "MCP session cleanup failed | session_id={session_id} | error={error}",
+                session_id=session_id,
+                error=str(exc),
+            )

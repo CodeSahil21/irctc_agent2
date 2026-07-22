@@ -1,4 +1,3 @@
-# db/mongo.py
 """
 Motor async MongoDB client.
 Initialized once in lifespan.py and stored on app.state.

@@ -1,4 +1,4 @@
-# mcp/client.py
+# app/mcp/client.py
 import asyncio
 import time
 from typing import Any, Dict, List, Optional
@@ -18,7 +18,7 @@ from app.telemetry.logging import app_logger
 # Max retries for transient failures
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = [0.5, 1.0, 2.0]  # seconds
-_MCP_PROTOCOL_VERSION = "2025-11-25"
+_MCP_PROTOCOL_VERSION = "2024-11-05"  # Standardized protocol version
 
 
 class MCPClient:
@@ -223,7 +223,21 @@ class MCPClient:
                 },
             },
         }
-        await self._raw_send(payload, user_email, user_name)
+        body, _ = await self._raw_send(payload, user_email, user_name)
+
+        if not session.session_id:
+            app_logger.warning("MCP initialize response did not set mcp-session-id header | user={user}", user=user_email)
+
+        # Notify the server initialization is complete (JSON-RPC notification - NO id field)
+        initialized_notification = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }
+        try:
+            await self._raw_send(initialized_notification, user_email, user_name)
+        except Exception as err:
+            app_logger.warning("notifications/initialized notification ignored | err={err}", err=str(err))
 
     def _next_id(self) -> int:
         self._request_counter += 1

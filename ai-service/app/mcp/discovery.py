@@ -28,8 +28,7 @@ class MCPDiscovery:
         """
         raw_tools = await self._client.list_tools(user_email=_PROBE_EMAIL)
 
-        # MCP SDK returns 'inputSchema' (camelCase) but Anthropic requires 'input_schema' (snake_case).
-        # Normalize here once so every consumer gets the correct format.
+        # Normalize and sanitize tool definitions for Anthropic compatibility
         self._tools = [self._normalize_tool(t) for t in raw_tools]
         self._by_name = {t["name"]: t for t in self._tools}
 
@@ -44,11 +43,25 @@ class MCPDiscovery:
 
     @staticmethod
     def _normalize_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert MCP inputSchema (camelCase) → input_schema (snake_case) for Anthropic."""
-        normalized = dict(tool)
-        if "inputSchema" in normalized and "input_schema" not in normalized:
-            normalized["input_schema"] = normalized.pop("inputSchema")
-        return normalized
+        """
+        Convert MCP tool schema into Anthropic-compatible tool schema.
+        1. Convert inputSchema (camelCase) -> input_schema (snake_case).
+        2. Strip out non-standard Anthropic fields (like 'execution').
+        """
+        raw_schema = tool.get("input_schema") or tool.get("inputSchema", {})
+
+        anthropic_tool = {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "input_schema": raw_schema,
+        }
+
+        if "strict" in tool:
+            anthropic_tool["strict"] = tool["strict"]
+        if "cache_control" in tool:
+            anthropic_tool["cache_control"] = tool["cache_control"]
+
+        return anthropic_tool
 
     def get_tools(self) -> List[Dict[str, Any]]:
         """Return all cached tool schemas (Anthropic-compatible format)."""
