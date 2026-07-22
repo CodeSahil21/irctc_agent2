@@ -81,8 +81,7 @@ flowchart LR
 
 ### HTTP chat path
 
-1. Client sends `POST /api/v1/chatI harden the remaining ai-service warnings one by one.
-I audit the MCP server tool behavior against the agent planner more deeply.` or `POST /api/v1/chat/stream`.
+1. Client sends `POST /api/v1/chat` or `POST /api/v1/chat/stream`.
 2. The request is validated by FastAPI schemas.
 3. `ChatService` handles plain Claude chat without graph execution.
 4. Streaming responses are emitted as SSE frames for `/chat/stream`.

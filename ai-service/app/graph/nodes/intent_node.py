@@ -83,6 +83,30 @@ def _normalize_date(value: str) -> str:
     m = re.match(r"(\d{2})-(\d{2})-(\d{4})", value)
     if m:
         return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    # "23rd July 2026", "23 July 2026", "July 23 2026", "23/07/2026" etc.
+    _MONTHS = {
+        "january": 1, "february": 2, "march": 3, "april": 4,
+        "may": 5, "june": 6, "july": 7, "august": 8,
+        "september": 9, "october": 10, "november": 11, "december": 12,
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    }
+    # DD Month YYYY or DDth Month YYYY
+    m = re.search(r"(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\s+(\d{4})", v)
+    if m:
+        month = _MONTHS.get(m.group(2))
+        if month:
+            return f"{m.group(3)}-{month:02d}-{int(m.group(1)):02d}"
+    # Month DD YYYY
+    m = re.search(r"([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(\d{4})", v)
+    if m:
+        month = _MONTHS.get(m.group(1))
+        if month:
+            return f"{m.group(3)}-{month:02d}-{int(m.group(2)):02d}"
+    # DD/MM/YYYY or DD-MM-YYYY (non-ISO)
+    m = re.match(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", value)
+    if m:
+        return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
     return value
 
 

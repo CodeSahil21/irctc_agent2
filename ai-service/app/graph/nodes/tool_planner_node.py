@@ -51,6 +51,8 @@ Rules:
 - For recommend_trains, set preference to "fastest", "cheapest", or "overnight" based on user goal.
 - For create_reminder and update_reminder, use param name "type" (values: JOURNEY, PNR, BOOKING).
 - check_availability, get_fare, and get_live_status can run in parallel after search_trains.
+- If user asks for route/schedule of multiple trains, plan one get_route call per train number.
+- Default quota to "GN" if not specified by user.
 - Always call create_tool_plan tool."""
 
 # Intents where reflection adds value (data-heavy responses)
