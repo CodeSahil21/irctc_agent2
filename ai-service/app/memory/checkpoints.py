@@ -9,6 +9,10 @@ def get_checkpointer(
     """
     Creates and returns a MongoDBSaver checkpointer.
     Uses a dedicated sync pymongo client (MongoDBSaver requires pymongo, not Motor).
+
+    The graph runs via ainvoke/astream_events, which call MongoDBSaver's async
+    methods (aput/aget_tuple/alist). Those offload the blocking pymongo calls to a
+    thread executor, so checkpointing does not block the event loop.
     """
     client = MongoClient(mongo_url)
     try:

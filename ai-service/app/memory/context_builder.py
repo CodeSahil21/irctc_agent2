@@ -1,5 +1,4 @@
 import json
-from typing import Any, Dict, Optional
 
 from app.graph.state import TravelState
 from app.memory.preference_memory import preferences_summary
@@ -66,6 +65,13 @@ def build_planner_context(state: TravelState, tools_summary: str) -> str:
         parts.append(f"Availability (already checked): {json.dumps(state['availability'])}")
     if state.get("fare"):
         parts.append(f"Fare (already fetched): {json.dumps(state['fare'])}")
+    if travel.get("pnr"):
+        parts.append(f"PNR in context: {travel['pnr']} (use for pnr/booking tools)")
+    if state.get("booking"):
+        parts.append(f"Booking (already fetched): {json.dumps(state['booking'])}")
+    if state.get("reminders"):
+        # Includes reminderId values needed for update_reminder / delete_reminder
+        parts.append(f"Reminders (with IDs):\n{json.dumps(state['reminders'], indent=2)}")
     if state.get("passengers"):
         parts.append(f"Passengers: {len(state['passengers'])} passenger(s) ready")
     if travel.get("selected_passengers"):

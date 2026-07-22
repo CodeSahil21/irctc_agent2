@@ -53,7 +53,7 @@ def create_agent_graph(
 
     # ── Nodes ─────────────────────────────────────────────────────────
     builder.add_node("intent_node", partial(intent_node, claude_service=claude_service))
-    builder.add_node("slot_filler_node", slot_filler_node)
+    builder.add_node("slot_filler_node", partial(slot_filler_node, mcp_registry=mcp_registry))
     builder.add_node("tool_planner_node", partial(tool_planner_node, claude_service=claude_service, mcp_registry=mcp_registry))
     builder.add_node("human_approval_node", human_approval_node)
     builder.add_node("tool_executor_node", partial(tool_executor_node, mcp_registry=mcp_registry))

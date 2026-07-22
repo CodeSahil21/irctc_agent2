@@ -48,6 +48,20 @@ async def reflection_node(state: TravelState, claude_service: ClaudeService) -> 
     tool_history = state.get("tool_history") or []
     errors = state.get("errors") or []
 
+    # Deterministic pre-gate: if any tool failed or errored, the goal is not met.
+    # We never let Claude rubber-stamp "satisfied" over a failed/empty tool run.
+    has_failures = bool(errors) or any(
+        entry.get("status") in ("failed", "error") for entry in tool_history
+    )
+    if has_failures:
+        feedback = "; ".join(errors) if errors else "One or more tools failed to return data."
+        app_logger.info("Reflection pre-gate failed | feedback={f}", f=feedback)
+        return {
+            "reflection_passed": False,
+            "reflection_feedback": feedback,
+            "reflection_required": False,
+        }
+
     # Build a compact summary of what was executed and what came back
     results_summary = []
     for entry in tool_history:

@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 from app.mcp.exceptions import (
     MCPConnectionError,
     MCPError,
-    MCPInvalidResponseError,
     MCPSessionError,
     MCPToolNotFoundError,
 )

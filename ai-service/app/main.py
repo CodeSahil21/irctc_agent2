@@ -7,7 +7,7 @@ from app.api.routes import api_router
 from app.config.settings import get_settings
 from app.core.handlers import register_exception_handlers
 from app.core.lifespan import lifespan
-from app.telemetry.logging import app_logger, setup_logging
+from app.telemetry.logging import setup_logging
 from app.websocket.manager import sio
 
 setup_logging()

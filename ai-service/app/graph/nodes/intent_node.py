@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from app.graph.state import TravelState
 from app.memory.conversation_memory import format_for_claude
-from app.memory.preference_memory import get_preferences, merge_preferences_into_travel
+from app.memory.preference_memory import merge_preferences_into_travel
 from app.memory.working_memory import reset_turn_state
 from app.services.claude import ClaudeService
 from app.telemetry.logging import app_logger
@@ -188,9 +188,8 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
         if any(w in " ".join(selected_names).lower() for w in ("both", "all")):
             existing_travel["selected_passengers"] = state.get("saved_passengers") or []
 
-    # Layer 3 — load user preferences and apply to travel context
-    user_email = state.get("user_email") or ""
-    prefs = get_preferences(user_email) if user_email else {}
+    # Layer 3 — user preferences are seeded into state at conversation open
+    prefs = state.get("user_preferences") or {}
     if prefs:
         existing_travel = merge_preferences_into_travel(existing_travel, prefs)
 

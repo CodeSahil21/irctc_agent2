@@ -1,5 +1,4 @@
 # graph/nodes/human_approval_node.py
-import json
 from typing import Any, Dict
 
 from langgraph.types import interrupt

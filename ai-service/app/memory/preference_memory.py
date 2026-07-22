@@ -1,18 +1,17 @@
-from typing import Dict, Optional
+"""
+Layer 3 — User Preference Memory
+
+Preferences (preferred class/quota/berth/senior) are loaded from MongoDB when a
+conversation opens and flow through the graph via `state["user_preferences"]`.
+
+There is deliberately NO process-global cache: a module-level dict would be shared
+across every concurrent request/user and every uvicorn worker, causing stale or
+cross-request reads. Loading per conversation-open and passing through graph state
+keeps each request isolated.
+"""
+from typing import Dict
 
 from app.graph.state import UserPreferences
-
-_cache: Dict[str, UserPreferences] = {}
-
-
-def get_preferences(user_email: str) -> UserPreferences:
-    return dict(_cache.get(user_email, {}))
-
-
-def set_preferences(user_email: str, prefs: UserPreferences) -> None:
-    existing = dict(_cache.get(user_email, {}))
-    existing.update({k: v for k, v in prefs.items() if v is not None})
-    _cache[user_email] = UserPreferences(**existing)
 
 
 def merge_preferences_into_travel(travel: Dict, prefs: UserPreferences) -> Dict:
@@ -40,26 +39,25 @@ def preferences_summary(prefs: UserPreferences) -> str:
 
 
 async def load_preferences_from_db(db, user_email: str) -> UserPreferences:
-    """Load preferences from MongoDB into the in-process cache."""
+    """Load a user's preferences from MongoDB. Returns {} when none exist."""
     from app.db.repositories.preference_repo import get_preferences as db_get
     doc = await db_get(db, user_email)
     if doc:
-        prefs = UserPreferences(
+        return UserPreferences(
             preferred_class=doc.get("preferred_class"),
             preferred_quota=doc.get("preferred_quota"),
             berth_preference=doc.get("berth_preference"),
             senior_citizen=doc.get("senior_citizen"),
         )
-        _cache[user_email] = prefs
-        return prefs
     return {}
 
 
-async def persist_preferences(db, user_email: str) -> None:
-    """Flush the in-process cache entry for this user to MongoDB."""
-    from app.db.repositories.preference_repo import upsert_preferences
+async def persist_preferences(db, user_email: str, prefs: UserPreferences) -> None:
+    """Persist explicit preferences for a user to MongoDB."""
+    if not prefs:
+        return
     from app.db.models import UserPreferenceDoc
-    prefs = _cache.get(user_email, {})
+    from app.db.repositories.preference_repo import upsert_preferences
     await upsert_preferences(
         db,
         UserPreferenceDoc(

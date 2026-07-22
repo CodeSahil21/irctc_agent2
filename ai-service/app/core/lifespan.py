@@ -24,14 +24,12 @@ from app.websocket.manager import _make_manager
 
 
 async def _discover_tools_with_retry(discovery: MCPDiscovery, attempts: int = 5) -> None:
-    last_error: Exception | None = None
     for attempt in range(attempts):
         try:
             await discovery.discover()
             if discovery.has_tools():
                 return
         except Exception as exc:
-            last_error = exc
             app_logger.warning(
                 "MCP discovery attempt failed | attempt={attempt} | error={error}",
                 attempt=attempt + 1,

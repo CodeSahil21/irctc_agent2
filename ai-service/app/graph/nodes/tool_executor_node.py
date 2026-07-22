@@ -4,6 +4,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
+from app.graph.arg_patcher import patch_tool_args
 from app.graph.state import TravelState, ToolCall
 from app.graph.tool_preconditions import get_precondition
 from app.mcp.registry import MCPToolRegistry
@@ -36,6 +37,14 @@ async def _execute_one(
     except Exception as e:
         app_logger.error("Tool raised exception | tool={tool} | error={e}", tool=tool_name, e=str(e))
         return {"status": "error", "error_type": "EXCEPTION", "message": str(e)}
+
+
+def _downstream_has_destructive(tool_plan: List[str], after_index: int) -> bool:
+    """True if any tool after `after_index` requires confirmation (booking/cancel/etc)."""
+    return any(
+        get_precondition(t).requires_confirmation
+        for t in tool_plan[after_index + 1:]
+    )
 
 
 def _apply_result(
@@ -112,10 +121,19 @@ async def _execute_parallel_group(
     errors: List[str],
     travel: Dict[str, Any],
     parallel_results: Dict[str, Any],
+    state: TravelState,
 ) -> Dict[str, Any]:
     """Fire all tools in the group concurrently, merge results."""
     named_tasks = [
-        (tool_plan[idx], tool_plan_args[idx] if idx < len(tool_plan_args) else {})
+        (
+            tool_plan[idx],
+            patch_tool_args(
+                tool_plan[idx],
+                tool_plan_args[idx] if idx < len(tool_plan_args) else {},
+                state,
+                travel,
+            ),
+        )
         for idx in group_indices
     ]
 
@@ -130,10 +148,12 @@ async def _execute_parallel_group(
 
     updates: Dict[str, Any] = {"current_tool_index": group_indices[-1] + 1, "retries": 0}
 
+    group_had_failure = False
     for (name, args), parsed in zip(named_tasks, results):
         status = parsed.get("status", "error")
         result_data = parsed.get("data")
         if status == "error":
+            group_had_failure = True
             errors.append(f"{name}: {parsed.get('message')}")
             tool_history.append(ToolCall(tool=name, args=args, result=parsed, status="failed", retries=0, latency_ms=group_latency))
             app_logger.warning("Parallel tool failed | tool={tool}", tool=name)
@@ -142,6 +162,12 @@ async def _execute_parallel_group(
             parallel_results[name] = result_data
             _apply_result(name, result_data, updates, travel)
             app_logger.info("Parallel tool succeeded | tool={tool}", tool=name)
+
+    # A failed prerequisite (e.g. availability/fare) must not lead to a downstream
+    # destructive step (e.g. book_ticket) running with missing data — abort the plan.
+    if group_had_failure and _downstream_has_destructive(tool_plan, group_indices[-1]):
+        app_logger.warning("Aborting plan — prerequisite failed before a destructive step")
+        updates["current_tool_index"] = len(tool_plan)
 
     updates["tool_history"] = tool_history
     updates["errors"] = errors
@@ -182,46 +208,16 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
             return await _execute_parallel_group(
                 group_indices, tool_plan, tool_plan_args,
                 user_email, user_name, mcp_registry,
-                tool_history, errors, travel, parallel_results,
+                tool_history, errors, travel, parallel_results, state,
             )
 
     # ── Sequential single tool ────────────────────────────────────────
     tool_args = dict(tool_plan_args[current_index]) if current_index < len(tool_plan_args) else {}
 
-    # Patch book_ticket args with live state values so the planner
-    # doesn't need to guess fare, train details, or route at plan time.
-    if tool_name == "book_ticket":
-        fare_data = state.get("fare") or {}
-        if fare_data.get("amount"):
-            tool_args["fare"] = fare_data["amount"]
-        for key, state_key in (
-            ("trainNumber", "train_number"),
-            ("trainName", "train_name"),
-            ("source", "from_station"),
-            ("destination", "to_station"),
-            ("journeyDate", "date"),
-            ("travelClass", "travel_class"),
-            ("quota", "quota"),
-        ):
-            if not tool_args.get(key) and travel.get(state_key):
-                tool_args[key] = travel[state_key]
-        # Ensure passengers is always a list of dicts, never a string
-        passengers = tool_args.get("passengers")
-        if not isinstance(passengers, list) or not passengers:
-            # Prefer explicitly selected passengers, then all saved passengers
-            selected = travel.get("selected_passengers") or state.get("saved_passengers") or []
-            if selected:
-                tool_args["passengers"] = [
-                    {
-                        "name": p.get("name", ""),
-                        "age": p.get("age", 25),
-                        "gender": p.get("gender", "MALE"),
-                        "berthPreference": p.get("berthPreference"),
-                    }
-                    for p in selected
-                ]
-            else:
-                tool_args["passengers"] = [{"name": "Passenger 1", "age": 25, "gender": "MALE"}]
+    # Re-resolve arguments from live state so deterministic chains
+    # (search → check_availability → get_fare → book_ticket) don't depend on
+    # the planner having guessed train numbers, fares, or the route.
+    tool_args = patch_tool_args(tool_name, tool_args, state, travel)
 
     app_logger.info(
         "Executing tool | tool={tool} | index={idx}/{total}",
@@ -250,7 +246,12 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
 
         app_logger.error("Tool failed permanently or exhausted retries | tool={tool}", tool=tool_name)
         tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=parsed, status="failed", retries=retries, latency_ms=latency_ms))
-        return {"tool_history": tool_history, "current_tool_index": current_index + 1, "retries": 0, "errors": errors}
+        # Don't let a downstream destructive step (e.g. book_ticket) run after a
+        # failed prerequisite — abort the rest of the plan.
+        next_index = len(tool_plan) if _downstream_has_destructive(tool_plan, current_index) else current_index + 1
+        if next_index == len(tool_plan) and next_index != current_index + 1:
+            app_logger.warning("Aborting plan — prerequisite failed before a destructive step")
+        return {"tool_history": tool_history, "current_tool_index": next_index, "retries": 0, "errors": errors}
 
     tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=result_data, status="success", retries=retries, latency_ms=latency_ms))
     updates: Dict[str, Any] = {"tool_history": tool_history, "current_tool_index": current_index + 1, "retries": 0, "errors": errors}
