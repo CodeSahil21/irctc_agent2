@@ -36,6 +36,8 @@ _SYSTEM = """You are an IRCTC travel agent planner. Given the user's intent and 
 produce an ordered list of tool calls needed to fulfill the request.
 
 Rules:
+- Check each tool's schema properties before creating args. Only include parameters defined in the schema.
+- If required parameters for a tool are missing from user context, do not speculate — plan prior tools (e.g. find_station_code) to retrieve them.
 - Use station codes (e.g. NDLS, BCT) not city names in tool args.
 - If station codes are unknown, start with find_station_code.
 - For booking: search_trains → check_availability → get_fare → book_ticket.
@@ -88,14 +90,17 @@ async def tool_planner_node(
         tools=tools_for_claude,
         tool_choice={"type": "tool", "name": "create_tool_plan"},
         temperature=0.0,
-        max_tokens=1024,
+        max_tokens=2048,
         cache_system=True,
     )
 
     steps: List[Dict[str, Any]] = []
     for block in response.content:
         if getattr(block, "type", None) == "tool_use":
-            steps = block.input.get("steps", [])
+            raw_steps = block.input.get("steps", [])
+            # Guard against Claude returning steps as strings instead of dicts
+            # (happens when output is truncated due to max_tokens)
+            steps = [s for s in raw_steps if isinstance(s, dict) and "tool" in s]
             break
 
     tool_plan = [s["tool"] for s in steps]

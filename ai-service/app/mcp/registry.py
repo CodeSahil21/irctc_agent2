@@ -28,6 +28,35 @@ class MCPToolRegistry:
         app_logger.warning("Tool cache empty — refreshing MCP discovery")
         await self._discovery.refresh()
 
+    def _clean_and_validate_args(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], Optional[str]]:
+        """
+        1. Strips extra hallucinated arguments not in properties.
+        2. Checks for missing required arguments.
+        Returns: (cleaned_args, error_message)
+        """
+        schema_info = self._discovery.get_tool_schema(tool_name)
+        if not schema_info:
+            return arguments, None
+
+        input_schema = schema_info.get("input_schema", {})
+        properties = input_schema.get("properties", {})
+        required_fields = input_schema.get("required", [])
+
+        # Filter out keys not defined in schema properties (if properties exist)
+        if properties:
+            cleaned_args = {k: v for k, v in arguments.items() if k in properties}
+        else:
+            cleaned_args = dict(arguments)
+
+        # Check for missing required parameters
+        missing = [field for field in required_fields if field not in cleaned_args]
+        if missing:
+            return cleaned_args, f"Missing required parameter(s) for '{tool_name}': {', '.join(missing)}"
+
+        return cleaned_args, None
+
     @traceable(name="mcp_execute_tool", run_type="tool")
     async def execute(
         self,
@@ -38,8 +67,7 @@ class MCPToolRegistry:
     ) -> str:
         """
         Execute a tool by name via MCP.
-        Returns a JSON string in the same envelope format as the old execute_tool()
-        so tool_executor_node needs minimal changes.
+        Returns a JSON string in the same envelope format as the old execute_tool().
         """
         await self._ensure_discovery()
 
@@ -54,9 +82,19 @@ class MCPToolRegistry:
                 "message": f"Tool '{tool_name}' is not registered on the MCP server.",
             })
 
+        # Clean and validate parameters
+        cleaned_args, error_msg = self._clean_and_validate_args(tool_name, arguments)
+        if error_msg:
+            app_logger.warning("Tool parameter error | tool={tool} | error={err}", tool=tool_name, err=error_msg)
+            return json.dumps({
+                "status": "error",
+                "error_type": "INVALID_PARAMETERS",
+                "message": error_msg,
+            })
+
         result: ToolResult = await self._client.call_tool(
             tool_name=tool_name,
-            arguments=arguments,
+            arguments=cleaned_args,
             user_email=user_email,
             user_name=user_name,
         )
@@ -68,9 +106,11 @@ class MCPToolRegistry:
         Return tool schemas in Anthropic tool-use format.
         Used by tool_planner_node to give Claude the live tool list.
         """
-        # The planner runs after startup, but if discovery raced the MCP server
-        # we still want to recover on the next access rather than planning with an empty set.
         return self._discovery.get_tools()
+
+    def get_tool_schema(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """Return the schema dictionary for a specific tool."""
+        return self._discovery.get_tool_schema(tool_name)
 
     def is_known(self, tool_name: str) -> bool:
         return self._discovery.is_known(tool_name)

@@ -95,18 +95,16 @@ class MCPTransport:
         try:
             text = response.text.strip()
 
-            # Robust SSE parsing for 'data:' lines and 'event:' prefixes
-            extracted = None
+            # Collect all SSE data: lines and join them to reconstruct
+            # the full JSON payload (which may be split across multiple lines)
+            data_lines = []
             for line in text.splitlines():
                 line = line.strip()
                 if line.startswith("data:"):
-                    extracted = line[5:].strip()
-                    break
+                    data_lines.append(line[5:].strip())
 
-            if extracted:
-                text = extracted
-            elif text.startswith("event:"):
-                text = "\n".join([l for l in text.splitlines() if not l.startswith("event:")]).strip()
+            if data_lines:
+                text = "\n".join(data_lines)
 
             body = json.loads(text)
         except (ValueError, Exception) as e:

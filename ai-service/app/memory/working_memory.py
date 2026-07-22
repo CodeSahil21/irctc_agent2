@@ -57,13 +57,20 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "pending_question": None,
         "errors": [],
         "retries": 0,
-        # Phase 12 — clear per-turn advanced features
+        # Clear per-turn advanced features
         "parallel_results": {},
         "tool_results": {},
         "reflection_required": None,
         "reflection_passed": None,
         "reflection_feedback": "",
         "ranked_results": None,
+        # Clear stale tool result fields so previous turn data doesn't bleed in
+        "search_results": [],
+        "availability": None,
+        "fare": None,
+        "booking": None,
+        "reminders": None,
+        "saved_passengers": None,
         "execution_metrics": ExecutionMetrics(
             turn_start_time=time.time(),
             tools_called=0,

@@ -41,7 +41,10 @@ def build_tool_context(state: TravelState) -> str:
     if state.get("tool_results"):
         for tool_name, result in state["tool_results"].items():
             label = tool_name.replace("_", " ").title()
-            parts.append(f"{label}:\n{json.dumps(result, indent=2)}")
+            if tool_name == "get_booking_history":
+                parts.append(f"Booking History:\n{json.dumps(result, indent=2)}")
+            else:
+                parts.append(f"{label}:\n{json.dumps(result, indent=2)}")
     if state.get("errors"):
         parts.append("Errors encountered:\n" + "\n".join(state["errors"]))
     if state.get("pending_question"):

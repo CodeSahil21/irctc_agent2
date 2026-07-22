@@ -1,4 +1,3 @@
-# mcp/normalizer.py
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -39,7 +38,7 @@ def normalize_mcp_response(
         { "result": { "content": [ { "type": "text", "text": "<json>" } ] } }
 
     MCP error shape:
-        { "error": { "code": -32000, "message": "..." } }
+        { "error": { "code": -32602, "message": "..." } }
     """
     import json
 
@@ -97,7 +96,7 @@ def _map_jsonrpc_error_code(code: int) -> str:
         -32700: "PARSE_ERROR",
         -32600: "INVALID_REQUEST",
         -32601: "METHOD_NOT_FOUND",
-        -32602: "INVALID_PARAMS",
+        -32602: "INVALID_PARAMETERS",
         -32603: "INTERNAL_ERROR",
     }
     return mapping.get(code, "MCP_ERROR")

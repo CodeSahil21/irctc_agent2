@@ -125,7 +125,6 @@ def _make_manager(agent_graph, conv_manager):
                 "messages": [HumanMessage(content=content)],
                 "user_email": session.user_email,
                 "user_name": session.user_name,
-                "travel": {},
             }
 
             # Stream graph execution with event callbacks

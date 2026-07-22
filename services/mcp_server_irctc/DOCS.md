@@ -13,10 +13,10 @@
 
 Every request to `/mcp` requires these HTTP headers:
 
-| Header | Required | Description |
-|---|---|---|
-| `x-user-email` | Yes | Authenticated user's email — used to scope all user tools |
-| `x-user-name` | No | User's display name |
+| Header           | Required           | Description                                                                       |
+| ---------------- | ------------------ | --------------------------------------------------------------------------------- |
+| `x-user-email`   | Yes                | Authenticated user's email — used to scope all user tools                         |
+| `x-user-name`    | No                 | User's display name                                                               |
 | `mcp-session-id` | No (first request) | Session ID returned after first request — must be sent on all subsequent requests |
 
 **First request** — do not send `mcp-session-id`. The server creates a new session and returns the session ID in the response headers as `mcp-session-id`. Send it on every request after that.
@@ -26,34 +26,39 @@ Every request to `/mcp` requires these HTTP headers:
 ## Reference Values
 
 ### Travel Classes
-| Code | Name |
-|---|---|
-| `SL` | Sleeper |
-| `3A` | AC 3 Tier |
-| `2A` | AC 2 Tier |
-| `1A` | AC First Class |
-| `CC` | AC Chair Car |
+
+| Code | Name                |
+| ---- | ------------------- |
+| `SL` | Sleeper             |
+| `3A` | AC 3 Tier           |
+| `2A` | AC 2 Tier           |
+| `1A` | AC First Class      |
+| `CC` | AC Chair Car        |
 | `EC` | Executive Chair Car |
-| `2S` | Second Sitting |
-| `VS` | Vistadome AC |
+| `2S` | Second Sitting      |
+| `VS` | Vistadome AC        |
 
 ### Quota Codes
-| Code | Name |
-|---|---|
-| `GN` | General |
-| `LD` | Ladies |
-| `TQ` | Tatkal |
-| `PT` | Premium Tatkal |
+
+| Code | Name            |
+| ---- | --------------- |
+| `GN` | General         |
+| `LD` | Ladies          |
+| `TQ` | Tatkal          |
+| `PT` | Premium Tatkal  |
 | `HO` | Higher Official |
-| `SS` | Senior Citizen |
+| `SS` | Senior Citizen  |
 
 ### Booking Status Values
+
 `PENDING` `BOOKED` `RAC` `WL` `CANCELLED` `FAILED`
 
 ### Reminder Types
+
 `JOURNEY` `PNR` `BOOKING`
 
 ### Gender Values
+
 `MALE` `FEMALE` `OTHER`
 
 ---
@@ -64,13 +69,13 @@ Every tool call follows this structure:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "<tool_name>",
-    "arguments": { }
-  }
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+        "name": "<tool_name>",
+        "arguments": {}
+    }
 }
 ```
 
@@ -88,28 +93,29 @@ Search trains between two stations on a given date.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `fromStation` | string | Yes | Origin station code e.g. `NDLS` |
-| `toStation` | string | Yes | Destination station code e.g. `BCT` |
-| `journeyDate` | string | Yes | Journey date in `YYYY-MM-DD` format |
-| `quota` | string | No | Quota code. Default: `GN` |
+| Field         | Type   | Required | Description                         |
+| ------------- | ------ | -------- | ----------------------------------- |
+| `fromStation` | string | Yes      | Origin station code e.g. `NDLS`     |
+| `toStation`   | string | Yes      | Destination station code e.g. `BCT` |
+| `journeyDate` | string | Yes      | Journey date in `YYYY-MM-DD` format |
+| `quota`       | string | No       | Quota code. Default: `GN`           |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "search_trains",
-    "arguments": {
-      "fromStation": "NDLS",
-      "toStation": "BCT",
-      "journeyDate": "2025-08-15",
-      "quota": "GN"
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+        "name": "search_trains",
+        "arguments": {
+            "fromStation": "NDLS",
+            "toStation": "BCT",
+            "journeyDate": "2025-08-15",
+            "quota": "GN"
+        }
     }
-  }
 }
 ```
 
@@ -125,28 +131,29 @@ Check seat availability for a train on a given date.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number e.g. `12951` |
-| `travelClass` | string | Yes | Class code e.g. `SL`, `3A`, `2A`, `1A` |
-| `quota` | string | Yes | Quota code e.g. `GN`, `TQ` |
-| `journeyDate` | string | Yes | `YYYY-MM-DD` |
+| Field         | Type   | Required | Description                            |
+| ------------- | ------ | -------- | -------------------------------------- |
+| `trainNumber` | string | Yes      | Train number e.g. `12951`              |
+| `travelClass` | string | Yes      | Class code e.g. `SL`, `3A`, `2A`, `1A` |
+| `quota`       | string | Yes      | Quota code e.g. `GN`, `TQ`             |
+| `journeyDate` | string | Yes      | `YYYY-MM-DD`                           |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 2,
-  "method": "tools/call",
-  "params": {
-    "name": "check_availability",
-    "arguments": {
-      "trainNumber": "12951",
-      "travelClass": "3A",
-      "quota": "GN",
-      "journeyDate": "2025-08-15"
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+        "name": "check_availability",
+        "arguments": {
+            "trainNumber": "12951",
+            "travelClass": "3A",
+            "quota": "GN",
+            "journeyDate": "2025-08-15"
+        }
     }
-  }
 }
 ```
 
@@ -162,30 +169,31 @@ Get fare for a train between two stations.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
-| `travelClass` | string | Yes | Class code |
-| `quota` | string | Yes | Quota code |
-| `fromStation` | string | Yes | Origin station code |
-| `toStation` | string | Yes | Destination station code |
+| Field         | Type   | Required | Description              |
+| ------------- | ------ | -------- | ------------------------ |
+| `trainNumber` | string | Yes      | Train number             |
+| `travelClass` | string | Yes      | Class code               |
+| `quota`       | string | Yes      | Quota code               |
+| `fromStation` | string | Yes      | Origin station code      |
+| `toStation`   | string | Yes      | Destination station code |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 3,
-  "method": "tools/call",
-  "params": {
-    "name": "get_fare",
-    "arguments": {
-      "trainNumber": "12951",
-      "travelClass": "SL",
-      "quota": "GN",
-      "fromStation": "NDLS",
-      "toStation": "BCT"
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+        "name": "get_fare",
+        "arguments": {
+            "trainNumber": "12951",
+            "travelClass": "SL",
+            "quota": "GN",
+            "fromStation": "NDLS",
+            "toStation": "BCT"
+        }
     }
-  }
 }
 ```
 
@@ -201,22 +209,23 @@ Get full route and all stops of a train.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 4,
-  "method": "tools/call",
-  "params": {
-    "name": "get_route",
-    "arguments": {
-      "trainNumber": "12301"
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+        "name": "get_route",
+        "arguments": {
+            "trainNumber": "12301"
+        }
     }
-  }
 }
 ```
 
@@ -232,26 +241,27 @@ Get coach-wise seat availability map for a train.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
-| `travelClass` | string | Yes | Class code |
-| `journeyDate` | string | Yes | `YYYY-MM-DD` |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
+| `travelClass` | string | Yes      | Class code   |
+| `journeyDate` | string | Yes      | `YYYY-MM-DD` |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 5,
-  "method": "tools/call",
-  "params": {
-    "name": "get_seat_map",
-    "arguments": {
-      "trainNumber": "12951",
-      "travelClass": "SL",
-      "journeyDate": "2025-08-15"
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+        "name": "get_seat_map",
+        "arguments": {
+            "trainNumber": "12951",
+            "travelClass": "SL",
+            "journeyDate": "2025-08-15"
+        }
     }
-  }
 }
 ```
 
@@ -267,26 +277,27 @@ Get available boarding points for a train from a station.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
-| `fromStation` | string | Yes | Station code |
-| `journeyDate` | string | Yes | `YYYY-MM-DD` |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
+| `fromStation` | string | Yes      | Station code |
+| `journeyDate` | string | Yes      | `YYYY-MM-DD` |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 6,
-  "method": "tools/call",
-  "params": {
-    "name": "get_boarding_points",
-    "arguments": {
-      "trainNumber": "12951",
-      "fromStation": "NDLS",
-      "journeyDate": "2025-08-15"
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "tools/call",
+    "params": {
+        "name": "get_boarding_points",
+        "arguments": {
+            "trainNumber": "12951",
+            "fromStation": "NDLS",
+            "journeyDate": "2025-08-15"
+        }
     }
-  }
 }
 ```
 
@@ -302,22 +313,23 @@ Get train details by train number.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 7,
-  "method": "tools/call",
-  "params": {
-    "name": "search_train_by_number",
-    "arguments": {
-      "trainNumber": "12301"
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+        "name": "search_train_by_number",
+        "arguments": {
+            "trainNumber": "12301"
+        }
     }
-  }
 }
 ```
 
@@ -333,24 +345,25 @@ Get live running status of a train.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
-| `date` | string | Yes | `YYYY-MM-DD` |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
+| `date`        | string | Yes      | `YYYY-MM-DD` |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 8,
-  "method": "tools/call",
-  "params": {
-    "name": "get_live_status",
-    "arguments": {
-      "trainNumber": "12301",
-      "date": "2025-08-15"
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "tools/call",
+    "params": {
+        "name": "get_live_status",
+        "arguments": {
+            "trainNumber": "12301",
+            "date": "2025-08-15"
+        }
     }
-  }
 }
 ```
 
@@ -366,22 +379,23 @@ Get full timetable/schedule of a train.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 9,
-  "method": "tools/call",
-  "params": {
-    "name": "get_train_schedule",
-    "arguments": {
-      "trainNumber": "12621"
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "tools/call",
+    "params": {
+        "name": "get_train_schedule",
+        "arguments": {
+            "trainNumber": "12621"
+        }
     }
-  }
 }
 ```
 
@@ -397,24 +411,25 @@ Get platform number for a train at a station.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
-| `stationCode` | string | Yes | Station code |
+| Field         | Type   | Required | Description  |
+| ------------- | ------ | -------- | ------------ |
+| `trainNumber` | string | Yes      | Train number |
+| `stationCode` | string | Yes      | Station code |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 10,
-  "method": "tools/call",
-  "params": {
-    "name": "get_platform",
-    "arguments": {
-      "trainNumber": "12301",
-      "stationCode": "NDLS"
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "tools/call",
+    "params": {
+        "name": "get_platform",
+        "arguments": {
+            "trainNumber": "12301",
+            "stationCode": "NDLS"
+        }
     }
-  }
 }
 ```
 
@@ -430,22 +445,23 @@ Search stations by name, code or city.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | Yes | Station name, code or city — partial match supported |
+| Field   | Type   | Required | Description                                          |
+| ------- | ------ | -------- | ---------------------------------------------------- |
+| `query` | string | Yes      | Station name, code or city — partial match supported |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 11,
-  "method": "tools/call",
-  "params": {
-    "name": "search_stations",
-    "arguments": {
-      "query": "Mumbai"
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "tools/call",
+    "params": {
+        "name": "search_stations",
+        "arguments": {
+            "query": "Mumbai"
+        }
     }
-  }
 }
 ```
 
@@ -461,22 +477,23 @@ Find station code from station name or city.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | Yes | Station name or city |
+| Field   | Type   | Required | Description          |
+| ------- | ------ | -------- | -------------------- |
+| `query` | string | Yes      | Station name or city |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 12,
-  "method": "tools/call",
-  "params": {
-    "name": "find_station_code",
-    "arguments": {
-      "query": "New Delhi"
+    "jsonrpc": "2.0",
+    "id": 12,
+    "method": "tools/call",
+    "params": {
+        "name": "find_station_code",
+        "arguments": {
+            "query": "New Delhi"
+        }
     }
-  }
 }
 ```
 
@@ -492,24 +509,25 @@ Get railway stations near a geographic location (within 50km).
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `lat` | number | Yes | Latitude |
-| `lng` | number | Yes | Longitude |
+| Field | Type   | Required | Description |
+| ----- | ------ | -------- | ----------- |
+| `lat` | number | Yes      | Latitude    |
+| `lng` | number | Yes      | Longitude   |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 13,
-  "method": "tools/call",
-  "params": {
-    "name": "get_nearby_stations",
-    "arguments": {
-      "lat": 28.6139,
-      "lng": 77.2090
+    "jsonrpc": "2.0",
+    "id": 13,
+    "method": "tools/call",
+    "params": {
+        "name": "get_nearby_stations",
+        "arguments": {
+            "lat": 28.6139,
+            "lng": 77.209
+        }
     }
-  }
 }
 ```
 
@@ -526,15 +544,16 @@ List all available travel classes.
 **Input**: None
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 14,
-  "method": "tools/call",
-  "params": {
-    "name": "list_classes",
-    "arguments": {}
-  }
+    "jsonrpc": "2.0",
+    "id": 14,
+    "method": "tools/call",
+    "params": {
+        "name": "list_classes",
+        "arguments": {}
+    }
 }
 ```
 
@@ -551,15 +570,16 @@ List all available booking quotas.
 **Input**: None
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 15,
-  "method": "tools/call",
-  "params": {
-    "name": "list_quotas",
-    "arguments": {}
-  }
+    "jsonrpc": "2.0",
+    "id": 15,
+    "method": "tools/call",
+    "params": {
+        "name": "list_quotas",
+        "arguments": {}
+    }
 }
 ```
 
@@ -575,32 +595,33 @@ Get train recommendations ranked by preference.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `fromStation` | string | Yes | Origin station code |
-| `toStation` | string | Yes | Destination station code |
-| `journeyDate` | string | Yes | `YYYY-MM-DD` |
-| `preference` | string | Yes | `fastest` / `cheapest` / `overnight` |
-| `travelClass` | string | No | Class code. Default: `SL` |
-| `quota` | string | No | Quota code. Default: `GN` |
+| Field         | Type   | Required | Description                          |
+| ------------- | ------ | -------- | ------------------------------------ |
+| `fromStation` | string | Yes      | Origin station code                  |
+| `toStation`   | string | Yes      | Destination station code             |
+| `journeyDate` | string | Yes      | `YYYY-MM-DD`                         |
+| `preference`  | string | Yes      | `fastest` / `cheapest` / `overnight` |
+| `travelClass` | string | No       | Class code. Default: `SL`            |
+| `quota`       | string | No       | Quota code. Default: `GN`            |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 16,
-  "method": "tools/call",
-  "params": {
-    "name": "recommend_trains",
-    "arguments": {
-      "fromStation": "NDLS",
-      "toStation": "BCT",
-      "journeyDate": "2025-08-15",
-      "preference": "fastest",
-      "travelClass": "3A",
-      "quota": "GN"
+    "jsonrpc": "2.0",
+    "id": 16,
+    "method": "tools/call",
+    "params": {
+        "name": "recommend_trains",
+        "arguments": {
+            "fromStation": "NDLS",
+            "toStation": "BCT",
+            "journeyDate": "2025-08-15",
+            "preference": "fastest",
+            "travelClass": "3A",
+            "quota": "GN"
+        }
     }
-  }
 }
 ```
 
@@ -616,60 +637,61 @@ Book a train ticket for the authenticated user.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trainNumber` | string | Yes | Train number |
-| `trainName` | string | Yes | Train name |
-| `source` | string | Yes | Boarding station code |
-| `destination` | string | Yes | Destination station code |
-| `journeyDate` | string | Yes | `YYYY-MM-DD` |
-| `travelClass` | string | Yes | Class code |
-| `quota` | string | Yes | Quota code |
-| `fare` | number | Yes | Total fare amount |
-| `passengers` | array | Yes | Min 1 passenger. See passenger object below |
+| Field         | Type   | Required | Description                                 |
+| ------------- | ------ | -------- | ------------------------------------------- |
+| `trainNumber` | string | Yes      | Train number                                |
+| `trainName`   | string | Yes      | Train name                                  |
+| `source`      | string | Yes      | Boarding station code                       |
+| `destination` | string | Yes      | Destination station code                    |
+| `journeyDate` | string | Yes      | `YYYY-MM-DD`                                |
+| `travelClass` | string | Yes      | Class code                                  |
+| `quota`       | string | Yes      | Quota code                                  |
+| `fare`        | number | Yes      | Total fare amount                           |
+| `passengers`  | array  | Yes      | Min 1 passenger. See passenger object below |
 
 **Passenger object**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | Yes | Passenger full name |
-| `age` | integer | Yes | Age in years |
-| `gender` | string | Yes | `MALE` / `FEMALE` / `OTHER` |
-| `berthPreference` | string | No | e.g. `LB`, `MB`, `UB`, `SL`, `SU` |
+| Field             | Type    | Required | Description                       |
+| ----------------- | ------- | -------- | --------------------------------- |
+| `name`            | string  | Yes      | Passenger full name               |
+| `age`             | integer | Yes      | Age in years                      |
+| `gender`          | string  | Yes      | `MALE` / `FEMALE` / `OTHER`       |
+| `berthPreference` | string  | No       | e.g. `LB`, `MB`, `UB`, `SL`, `SU` |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 17,
-  "method": "tools/call",
-  "params": {
-    "name": "book_ticket",
-    "arguments": {
-      "trainNumber": "12951",
-      "trainName": "Mumbai Rajdhani Express",
-      "source": "NDLS",
-      "destination": "BCT",
-      "journeyDate": "2025-08-15",
-      "travelClass": "3A",
-      "quota": "GN",
-      "fare": 1450,
-      "passengers": [
-        {
-          "name": "Rahul Sharma",
-          "age": 28,
-          "gender": "MALE",
-          "berthPreference": "LB"
-        },
-        {
-          "name": "Priya Sharma",
-          "age": 25,
-          "gender": "FEMALE",
-          "berthPreference": "MB"
+    "jsonrpc": "2.0",
+    "id": 17,
+    "method": "tools/call",
+    "params": {
+        "name": "book_ticket",
+        "arguments": {
+            "trainNumber": "12951",
+            "trainName": "Mumbai Rajdhani Express",
+            "source": "NDLS",
+            "destination": "BCT",
+            "journeyDate": "2025-08-15",
+            "travelClass": "3A",
+            "quota": "GN",
+            "fare": 1450,
+            "passengers": [
+                {
+                    "name": "Rahul Sharma",
+                    "age": 28,
+                    "gender": "MALE",
+                    "berthPreference": "LB"
+                },
+                {
+                    "name": "Priya Sharma",
+                    "age": 25,
+                    "gender": "FEMALE",
+                    "berthPreference": "MB"
+                }
+            ]
         }
-      ]
     }
-  }
 }
 ```
 
@@ -685,22 +707,23 @@ Cancel a booked ticket by PNR.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `pnr` | string | Yes | PNR number of the booking to cancel |
+| Field | Type   | Required | Description                         |
+| ----- | ------ | -------- | ----------------------------------- |
+| `pnr` | string | Yes      | PNR number of the booking to cancel |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 18,
-  "method": "tools/call",
-  "params": {
-    "name": "cancel_ticket",
-    "arguments": {
-      "pnr": "4521367890"
+    "jsonrpc": "2.0",
+    "id": 18,
+    "method": "tools/call",
+    "params": {
+        "name": "cancel_ticket",
+        "arguments": {
+            "pnr": "4521367890"
+        }
     }
-  }
 }
 ```
 
@@ -716,22 +739,23 @@ Track and save PNR status for the authenticated user.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `pnr` | string | Yes | PNR number to track |
+| Field | Type   | Required | Description         |
+| ----- | ------ | -------- | ------------------- |
+| `pnr` | string | Yes      | PNR number to track |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 19,
-  "method": "tools/call",
-  "params": {
-    "name": "get_pnr",
-    "arguments": {
-      "pnr": "4521367890"
+    "jsonrpc": "2.0",
+    "id": 19,
+    "method": "tools/call",
+    "params": {
+        "name": "get_pnr",
+        "arguments": {
+            "pnr": "4521367890"
+        }
     }
-  }
 }
 ```
 
@@ -747,22 +771,23 @@ Get full booking details by PNR.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `pnr` | string | Yes | PNR number |
+| Field | Type   | Required | Description |
+| ----- | ------ | -------- | ----------- |
+| `pnr` | string | Yes      | PNR number  |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 20,
-  "method": "tools/call",
-  "params": {
-    "name": "get_booking",
-    "arguments": {
-      "pnr": "4521367890"
+    "jsonrpc": "2.0",
+    "id": 20,
+    "method": "tools/call",
+    "params": {
+        "name": "get_booking",
+        "arguments": {
+            "pnr": "4521367890"
+        }
     }
-  }
 }
 ```
 
@@ -779,15 +804,16 @@ Get all bookings for the authenticated user.
 **Input**: None
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 21,
-  "method": "tools/call",
-  "params": {
-    "name": "get_booking_history",
-    "arguments": {}
-  }
+    "jsonrpc": "2.0",
+    "id": 21,
+    "method": "tools/call",
+    "params": {
+        "name": "get_booking_history",
+        "arguments": {}
+    }
 }
 ```
 
@@ -803,26 +829,27 @@ Update the status of a booking.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `pnr` | string | Yes | PNR number |
-| `status` | string | Yes | `PENDING` / `BOOKED` / `RAC` / `WL` / `CANCELLED` / `FAILED` |
-| `transactionId` | string | No | Payment transaction ID |
+| Field           | Type   | Required | Description                                                  |
+| --------------- | ------ | -------- | ------------------------------------------------------------ |
+| `pnr`           | string | Yes      | PNR number                                                   |
+| `status`        | string | Yes      | `PENDING` / `BOOKED` / `RAC` / `WL` / `CANCELLED` / `FAILED` |
+| `transactionId` | string | No       | Payment transaction ID                                       |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 22,
-  "method": "tools/call",
-  "params": {
-    "name": "update_booking_status",
-    "arguments": {
-      "pnr": "4521367890",
-      "status": "BOOKED",
-      "transactionId": "TXN123456789"
+    "jsonrpc": "2.0",
+    "id": 22,
+    "method": "tools/call",
+    "params": {
+        "name": "update_booking_status",
+        "arguments": {
+            "pnr": "4521367890",
+            "status": "BOOKED",
+            "transactionId": "TXN123456789"
+        }
     }
-  }
 }
 ```
 
@@ -838,24 +865,25 @@ Change the boarding point for a booking.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `pnr` | string | Yes | PNR number |
-| `newBoardingStation` | string | Yes | New boarding station code |
+| Field                | Type   | Required | Description               |
+| -------------------- | ------ | -------- | ------------------------- |
+| `pnr`                | string | Yes      | PNR number                |
+| `newBoardingStation` | string | Yes      | New boarding station code |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 23,
-  "method": "tools/call",
-  "params": {
-    "name": "update_boarding_point",
-    "arguments": {
-      "pnr": "4521367890",
-      "newBoardingStation": "MTJ"
+    "jsonrpc": "2.0",
+    "id": 23,
+    "method": "tools/call",
+    "params": {
+        "name": "update_boarding_point",
+        "arguments": {
+            "pnr": "4521367890",
+            "newBoardingStation": "MTJ"
+        }
     }
-  }
 }
 ```
 
@@ -871,30 +899,31 @@ Create a journey, PNR or booking reminder.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `type` | string | Yes | `JOURNEY` / `PNR` / `BOOKING` |
-| `reminderAt` | string | Yes | ISO datetime string e.g. `2025-08-14T18:00:00.000Z` |
-| `bookingId` | string | No | Booking ID to link reminder to |
-| `metadata` | object | No | Any extra key-value data |
+| Field        | Type   | Required | Description                                         |
+| ------------ | ------ | -------- | --------------------------------------------------- |
+| `type`       | string | Yes      | `JOURNEY` / `PNR` / `BOOKING`                       |
+| `reminderAt` | string | Yes      | ISO datetime string e.g. `2025-08-14T18:00:00.000Z` |
+| `bookingId`  | string | No       | Booking ID to link reminder to                      |
+| `metadata`   | object | No       | Any extra key-value data                            |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 24,
-  "method": "tools/call",
-  "params": {
-    "name": "create_reminder",
-    "arguments": {
-      "type": "JOURNEY",
-      "reminderAt": "2025-08-14T18:00:00.000Z",
-      "bookingId": "booking-uuid-here",
-      "metadata": {
-        "note": "Reach station 1 hour early"
-      }
+    "jsonrpc": "2.0",
+    "id": 24,
+    "method": "tools/call",
+    "params": {
+        "name": "create_reminder",
+        "arguments": {
+            "type": "JOURNEY",
+            "reminderAt": "2025-08-14T18:00:00.000Z",
+            "bookingId": "booking-uuid-here",
+            "metadata": {
+                "note": "Reach station 1 hour early"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -911,15 +940,16 @@ Get all reminders for the authenticated user.
 **Input**: None
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 25,
-  "method": "tools/call",
-  "params": {
-    "name": "get_reminders",
-    "arguments": {}
-  }
+    "jsonrpc": "2.0",
+    "id": 25,
+    "method": "tools/call",
+    "params": {
+        "name": "get_reminders",
+        "arguments": {}
+    }
 }
 ```
 
@@ -935,29 +965,30 @@ Update an existing reminder.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `reminderId` | string | Yes | Reminder ID to update |
-| `reminderAt` | string | No | New ISO datetime string |
-| `type` | string | No | `JOURNEY` / `PNR` / `BOOKING` |
-| `metadata` | object | No | Updated metadata |
+| Field        | Type   | Required | Description                   |
+| ------------ | ------ | -------- | ----------------------------- |
+| `reminderId` | string | Yes      | Reminder ID to update         |
+| `reminderAt` | string | No       | New ISO datetime string       |
+| `type`       | string | No       | `JOURNEY` / `PNR` / `BOOKING` |
+| `metadata`   | object | No       | Updated metadata              |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 26,
-  "method": "tools/call",
-  "params": {
-    "name": "update_reminder",
-    "arguments": {
-      "reminderId": "reminder-uuid-here",
-      "reminderAt": "2025-08-14T16:00:00.000Z",
-      "metadata": {
-        "note": "Updated — reach 2 hours early"
-      }
+    "jsonrpc": "2.0",
+    "id": 26,
+    "method": "tools/call",
+    "params": {
+        "name": "update_reminder",
+        "arguments": {
+            "reminderId": "reminder-uuid-here",
+            "reminderAt": "2025-08-14T16:00:00.000Z",
+            "metadata": {
+                "note": "Updated — reach 2 hours early"
+            }
+        }
     }
-  }
 }
 ```
 
@@ -973,22 +1004,23 @@ Delete a reminder.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `reminderId` | string | Yes | Reminder ID to delete |
+| Field        | Type   | Required | Description           |
+| ------------ | ------ | -------- | --------------------- |
+| `reminderId` | string | Yes      | Reminder ID to delete |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 27,
-  "method": "tools/call",
-  "params": {
-    "name": "delete_reminder",
-    "arguments": {
-      "reminderId": "reminder-uuid-here"
+    "jsonrpc": "2.0",
+    "id": 27,
+    "method": "tools/call",
+    "params": {
+        "name": "delete_reminder",
+        "arguments": {
+            "reminderId": "reminder-uuid-here"
+        }
     }
-  }
 }
 ```
 
@@ -1004,30 +1036,31 @@ Save a passenger profile for future bookings.
 
 **Input**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | Yes | Passenger full name |
-| `age` | integer | Yes | Age in years |
-| `gender` | string | Yes | `MALE` / `FEMALE` / `OTHER` |
-| `berthPreference` | string | No | Preferred berth type |
-| `seniorCitizen` | boolean | No | Default: `false` |
+| Field             | Type    | Required | Description                 |
+| ----------------- | ------- | -------- | --------------------------- |
+| `name`            | string  | Yes      | Passenger full name         |
+| `age`             | integer | Yes      | Age in years                |
+| `gender`          | string  | Yes      | `MALE` / `FEMALE` / `OTHER` |
+| `berthPreference` | string  | No       | Preferred berth type        |
+| `seniorCitizen`   | boolean | No       | Default: `false`            |
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 28,
-  "method": "tools/call",
-  "params": {
-    "name": "add_saved_passenger",
-    "arguments": {
-      "name": "Rahul Sharma",
-      "age": 28,
-      "gender": "MALE",
-      "berthPreference": "LB",
-      "seniorCitizen": false
+    "jsonrpc": "2.0",
+    "id": 28,
+    "method": "tools/call",
+    "params": {
+        "name": "add_saved_passenger",
+        "arguments": {
+            "name": "Rahul Sharma",
+            "age": 28,
+            "gender": "MALE",
+            "berthPreference": "LB",
+            "seniorCitizen": false
+        }
     }
-  }
 }
 ```
 
@@ -1044,15 +1077,16 @@ Get all saved passenger profiles for the authenticated user.
 **Input**: None
 
 **Example**
+
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 29,
-  "method": "tools/call",
-  "params": {
-    "name": "get_saved_passengers",
-    "arguments": {}
-  }
+    "jsonrpc": "2.0",
+    "id": 29,
+    "method": "tools/call",
+    "params": {
+        "name": "get_saved_passengers",
+        "arguments": {}
+    }
 }
 ```
 
@@ -1066,21 +1100,21 @@ All errors follow this structure:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "error": {
-    "code": -32000,
-    "message": "Error message here"
-  }
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+        "code": -32000,
+        "message": "Error message here"
+    }
 }
 ```
 
-| HTTP Status | Meaning |
-|---|---|
-| `401` | Missing `x-user-email` header |
-| `403` | Session does not belong to this user |
-| `404` | Session not found / resource not found |
-| `500` | Internal server error |
+| HTTP Status | Meaning                                |
+| ----------- | -------------------------------------- |
+| `401`       | Missing `x-user-email` header          |
+| `403`       | Session does not belong to this user   |
+| `404`       | Session not found / resource not found |
+| `500`       | Internal server error                  |
 
 ---
 
