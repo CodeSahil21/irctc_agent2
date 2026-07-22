@@ -32,10 +32,10 @@ async def _execute_one(
         return json.loads(raw)
     except asyncio.TimeoutError:
         app_logger.warning("Tool timed out | tool={tool} | timeout={t}s", tool=tool_name, t=timeout)
-        return {"status": "error", "message": f"Tool '{tool_name}' timed out after {timeout}s"}
+        return {"status": "error", "error_type": "TIMEOUT", "message": f"Tool '{tool_name}' timed out after {timeout}s"}
     except Exception as e:
         app_logger.error("Tool raised exception | tool={tool} | error={e}", tool=tool_name, e=str(e))
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "error_type": "EXCEPTION", "message": str(e)}
 
 
 def _apply_result(
@@ -46,7 +46,12 @@ def _apply_result(
 ) -> None:
     """Merge a successful tool result into the updates dict."""
     if tool_name in ("search_trains", "recommend_trains"):
-        trains = result_data.get("trains", []) if isinstance(result_data, dict) else []
+        if isinstance(result_data, list):
+            trains = result_data
+        elif isinstance(result_data, dict):
+            trains = result_data.get("trains", [])
+        else:
+            trains = []
         updates["search_results"] = trains
         if trains:
             travel["train_number"] = trains[0].get("trainNumber", travel.get("train_number"))
@@ -55,14 +60,23 @@ def _apply_result(
         updates["availability"] = result_data
     elif tool_name == "get_fare":
         updates["fare"] = result_data
-    elif tool_name == "book_ticket":
+    elif tool_name in ("book_ticket", "cancel_ticket", "get_booking", "get_pnr", "update_booking_status", "update_boarding_point"):
         updates["booking"] = result_data
-    elif tool_name in ("get_reminders", "list_classes", "list_quotas"):
+        # Persist PNR into travel context for follow-up tools
+        if isinstance(result_data, dict) and result_data.get("pnr"):
+            travel["pnr"] = result_data["pnr"]
+    elif tool_name == "get_booking_history":
+        existing = dict(updates.get("tool_results") or {})
+        existing["get_booking_history"] = result_data if isinstance(result_data, list) else []
+        updates["tool_results"] = existing
+    elif tool_name == "get_reminders":
         updates["reminders"] = result_data if isinstance(result_data, list) else []
+    elif tool_name in ("list_classes", "list_quotas"):
+        existing = dict(updates.get("tool_results") or {})
+        existing[tool_name] = result_data
+        updates["tool_results"] = existing
     elif tool_name == "get_saved_passengers":
         updates["saved_passengers"] = result_data if isinstance(result_data, list) else []
-    elif tool_name in ("get_booking_history", "get_booking", "get_pnr"):
-        updates["booking"] = result_data
     elif tool_name == "find_station_code" and isinstance(result_data, dict):
         code = result_data.get("code")
         if code:
@@ -76,10 +90,15 @@ def _apply_result(
         updates["tool_results"] = existing
     else:
         # All other tools: store result in the generic tool_results bucket
-        # so response_node / build_tool_context can surface it to Claude.
         existing = dict(updates.get("tool_results") or {})
         existing[tool_name] = result_data
         updates["tool_results"] = existing
+        # Populate travel context from search_train_by_number result
+        if tool_name == "search_train_by_number" and isinstance(result_data, dict):
+            if result_data.get("trainNumber"):
+                travel["train_number"] = result_data["trainNumber"]
+            if result_data.get("trainName"):
+                travel["train_name"] = result_data["trainName"]
 
 
 async def _execute_parallel_group(
@@ -167,7 +186,41 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
             )
 
     # ── Sequential single tool ────────────────────────────────────────
-    tool_args = tool_plan_args[current_index] if current_index < len(tool_plan_args) else {}
+    tool_args = dict(tool_plan_args[current_index]) if current_index < len(tool_plan_args) else {}
+
+    # Patch book_ticket args with live state values so the planner
+    # doesn't need to guess fare, train details, or route at plan time.
+    if tool_name == "book_ticket":
+        fare_data = state.get("fare") or {}
+        if fare_data.get("amount"):
+            tool_args["fare"] = fare_data["amount"]
+        for key, state_key in (
+            ("trainNumber", "train_number"),
+            ("trainName", "train_name"),
+            ("source", "from_station"),
+            ("destination", "to_station"),
+            ("journeyDate", "date"),
+            ("travelClass", "travel_class"),
+            ("quota", "quota"),
+        ):
+            if not tool_args.get(key) and travel.get(state_key):
+                tool_args[key] = travel[state_key]
+        # Ensure passengers is always a list of dicts, never a string
+        passengers = tool_args.get("passengers")
+        if not isinstance(passengers, list) or not passengers:
+            saved = state.get("saved_passengers") or []
+            if saved:
+                tool_args["passengers"] = [
+                    {
+                        "name": p.get("name", ""),
+                        "age": p.get("age", 25),
+                        "gender": p.get("gender", "MALE"),
+                        "berthPreference": p.get("berthPreference"),
+                    }
+                    for p in saved
+                ]
+            else:
+                tool_args["passengers"] = [{"name": "Passenger 1", "age": 25, "gender": "MALE"}]
 
     app_logger.info(
         "Executing tool | tool={tool} | index={idx}/{total}",
@@ -179,17 +232,22 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
     latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
     status = parsed.get("status", "error")
+    error_type = parsed.get("error_type", "")
     result_data = parsed.get("data")
     error_msg = parsed.get("message")
 
     if status == "error":
         errors.append(f"{tool_name}: {error_msg}")
-        if retries < precondition.max_retries:
+        
+        # Avoid retrying if failure is due to schema validation / missing parameters
+        is_schema_error = error_type in ("INVALID_PARAMETERS", "UNKNOWN_TOOL")
+
+        if retries < precondition.max_retries and not is_schema_error:
             app_logger.warning("Tool failed, retrying | tool={tool} | attempt={n}", tool=tool_name, n=retries + 1)
             tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=parsed, status="error", retries=retries + 1, latency_ms=latency_ms))
             return {"tool_history": tool_history, "retries": retries + 1, "errors": errors}
 
-        app_logger.error("Tool exhausted retries | tool={tool}", tool=tool_name)
+        app_logger.error("Tool failed permanently or exhausted retries | tool={tool}", tool=tool_name)
         tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=parsed, status="failed", retries=retries, latency_ms=latency_ms))
         return {"tool_history": tool_history, "current_tool_index": current_index + 1, "retries": 0, "errors": errors}
 
