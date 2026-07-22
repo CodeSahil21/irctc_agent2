@@ -17,11 +17,17 @@ _PNR_RE = re.compile(r"\b\d{10}\b")
 
 
 def _grounded_pnrs(state: TravelState) -> Set[str]:
+    # Scan every state field that can legitimately contain a PNR.
+    # tool_results["get_booking_history"] is a list of booking objects — must be included.
     blob = json.dumps(
         {
             "booking": state.get("booking"),
             "travel": state.get("travel"),
             "tool_results": state.get("tool_results"),
+            "search_results": state.get("search_results"),
+            "availability": state.get("availability"),
+            "reminders": state.get("reminders"),
+            "saved_passengers": state.get("saved_passengers"),
         },
         default=str,
     )
@@ -49,6 +55,7 @@ CRITICAL RULES:
 - ONLY show PNR numbers that appear verbatim in the [Tool Results] block. If no booking result is present, do NOT show any PNR.
 - NEVER tell the user to visit www.irctc.co.in or any external website. All data comes from this system.
 - If tool results are missing or empty, tell the user you could not retrieve the data and ask them to try again.
+- NEVER ask the user for a PNR, booking ID, or passenger ID to fetch their saved passengers, booking history, or reminders — these are fetched automatically using their account. If these results are empty, say "no saved passengers found" etc., not "please provide your PNR".
 
 Guidelines:
 - Use Markdown tables for train lists.

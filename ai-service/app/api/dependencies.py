@@ -24,14 +24,6 @@ def get_claude_service(request: Request) -> ClaudeService:
 def get_chat_service(claude_service: ClaudeService = Depends(get_claude_service)) -> ChatService:
     return ChatService(claude_service=claude_service)
 
-
-async def get_redis(request: Request):
-    yield None
-
-
-async def get_db_session(request: Request):
-    yield None
-
 def get_agent_graph(request: Request):
     graph = getattr(request.app.state, "agent_graph", None)
     if graph is None:

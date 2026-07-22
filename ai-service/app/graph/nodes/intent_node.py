@@ -10,6 +10,15 @@ from app.memory.working_memory import reset_turn_state
 from app.services.claude import ClaudeService
 from app.telemetry.logging import app_logger
 
+# Intents that require zero user input and no planning — executor runs them directly
+_DIRECT_EXEC_INTENTS = {
+    "get_saved_passengers",
+    "get_booking_history",
+    "get_reminders",
+    "list_classes",
+    "list_quotas",
+}
+
 INTENTS = [
     "search_trains", "recommend_trains", "check_availability", "get_fare",
     "get_route", "get_train_schedule", "get_live_status", "get_platform",
@@ -66,9 +75,11 @@ def _normalize_date(value: str) -> str:
         return (today + timedelta(days=1)).isoformat()
     if "day after" in v:
         return (today + timedelta(days=2)).isoformat()
-    # "this week" / "anytime this week" / "next week" → nearest upcoming date (tomorrow)
-    if "this week" in v or "next week" in v or "anytime" in v:
+    # Fix 'next week' → +7 days, not +1
+    if "this week" in v or "anytime" in v:
         return (today + timedelta(days=1)).isoformat()
+    if "next week" in v:
+        return (today + timedelta(days=7)).isoformat()
     # "next monday" etc.
     days = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
             "friday": 4, "saturday": 5, "sunday": 6}
@@ -116,7 +127,27 @@ _INTENT_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "intent": {"type": "string", "enum": INTENTS, "description": "The primary user intent."},
+            "intent": {
+                "type": "string",
+                "enum": INTENTS,
+                "description": (
+                    "The primary user intent. Choose the most specific match. Examples:\n"
+                    "- 'show my passengers / passenger list / passenger history / saved travellers / my profiles' → get_saved_passengers\n"
+                    "- 'my bookings / booking history / past trips / all my tickets / what have I booked' → get_booking_history\n"
+                    "- 'my reminders / show reminders / upcoming alerts' → get_reminders\n"
+                    "- 'add passenger / save traveller / new passenger profile' → add_saved_passenger\n"
+                    "- 'check PNR / PNR status / track booking by PNR' → get_pnr\n"
+                    "- 'booking details / show booking / get booking' → get_booking\n"
+                    "- 'find trains / search trains / trains from X to Y' → search_trains\n"
+                    "- 'recommend / best train / suggest train' → recommend_trains\n"
+                    "- 'live status / where is train / running status' → get_live_status\n"
+                    "- 'cancel ticket / cancel booking' → cancel_ticket\n"
+                    "- 'set reminder / remind me' → create_reminder\n"
+                    "- 'what classes are available / list classes' → list_classes\n"
+                    "- 'what quotas / list quotas' → list_quotas\n"
+                    "- anything else → general_question"
+                ),
+            },
             "user_goal": {"type": "string", "description": "One-sentence summary of what the user wants."},
             "from_station": {"type": "string", "description": "Origin station name or code if mentioned."},
             "to_station": {"type": "string", "description": "Destination station name or code if mentioned."},
@@ -133,13 +164,29 @@ _INTENT_TOOL = {
         },
         "required": ["intent", "user_goal"],
     },
+    # cache_control must be at the tool top-level (not inside input_schema)
+    # so Anthropic's prompt caching picks up this entire tool definition.
     "cache_control": {"type": "ephemeral"},
 }
 
-_SYSTEM = (
-    "You are an IRCTC travel assistant. Classify the user's intent and extract "
-    "any travel entities from their message. Always call the classify_intent tool."
-)
+_SYSTEM = """You are an IRCTC travel assistant. Classify the user's intent and extract \
+any travel entities explicitly mentioned in the message. Always call the classify_intent tool.
+
+CRITICAL — only extract what the user actually said. Never invent, assume, or fill in values \
+the user did not mention. Leave all unmentioned fields absent from the tool call output.
+
+These intents require NO input from the user — call them immediately with no clarification:
+- get_saved_passengers   (fetches the user's saved passenger list automatically)
+- get_booking_history    (fetches the user's full booking history automatically)
+- get_reminders          (fetches the user's reminders automatically)
+- list_classes           (returns all travel class codes — no user input needed)
+- list_quotas            (returns all quota codes — no user input needed)
+- search_stations        (query comes from what the user typed — no follow-up needed)
+- find_station_code      (query comes from what the user typed — no follow-up needed)
+- get_nearby_stations    (location comes from context — no follow-up needed)
+
+For these intents, do NOT ask for PNR, booking ID, passenger ID, or any other field. \
+The system retrieves data using the authenticated user's identity automatically."""
 
 
 async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict[str, Any]:
@@ -202,5 +249,15 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
         "travel": existing_travel,
         "user_preferences": prefs or state.get("user_preferences"),
     })
+
+    # For zero-input tools: skip slot_filler + tool_planner entirely.
+    # Pre-populate the tool plan so tool_executor_node runs immediately.
+    if intent in _DIRECT_EXEC_INTENTS:
+        updates["tool_plan"] = [intent]
+        updates["tool_plan_args"] = [{}]
+        updates["current_tool_index"] = 0
+        updates["confirmation_required"] = False
+        updates["reflection_required"] = False
+        app_logger.info("Direct-exec intent — bypassing planner | intent={intent}", intent=intent)
 
     return updates

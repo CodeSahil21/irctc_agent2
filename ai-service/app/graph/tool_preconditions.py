@@ -25,6 +25,7 @@ TOOL_PRECONDITIONS: Dict[str, ToolPrecondition] = {
         timeout_seconds=15.0,
     ),
     "recommend_trains": ToolPrecondition(
+        # preference is planner-filled ("fastest"/"cheapest"/"overnight") — not a user slot
         required_slots=["from_station", "to_station", "date"],
         optional_slots=["travel_class", "quota"],
         cacheable=True,
@@ -74,18 +75,21 @@ TOOL_PRECONDITIONS: Dict[str, ToolPrecondition] = {
         timeout_seconds=10.0,
     ),
     "get_platform": ToolPrecondition(
-        required_slots=["train_number"],
-        optional_slots=["from_station"],
+        # stationCode is required per DOCS.md — filled from travel.from_station by arg_patcher
+        required_slots=["train_number", "station_code"],
         timeout_seconds=10.0,
     ),
+    # query is required per DOCS.md but is planner-filled from user message — not a slot filler concern
     "search_stations": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
     "find_station_code": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
+    # lat/lng are planner-filled — not user slots we ask for
     "get_nearby_stations": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
     "list_classes": ToolPrecondition(cacheable=True, timeout_seconds=5.0),
     "list_quotas": ToolPrecondition(cacheable=True, timeout_seconds=5.0),
 
     # ── Booking ───────────────────────────────────────────────────────
     "book_ticket": ToolPrecondition(
+        # trainName, fare, passengers are auto-filled by arg_patcher — not user slots
         required_slots=["train_number", "from_station", "to_station", "date", "travel_class", "quota"],
         requires_confirmation=True,
         max_retries=1,
@@ -99,30 +103,39 @@ TOOL_PRECONDITIONS: Dict[str, ToolPrecondition] = {
     ),
     "get_pnr": ToolPrecondition(required_slots=["pnr"], timeout_seconds=10.0),
     "get_booking": ToolPrecondition(required_slots=["pnr"], timeout_seconds=10.0),
+    # No required user input — scoped to authenticated user automatically
     "get_booking_history": ToolPrecondition(cacheable=True, timeout_seconds=10.0),
     "update_booking_status": ToolPrecondition(
+        # status is planner-filled — not asked from user
         required_slots=["pnr"],
         requires_confirmation=True,
         timeout_seconds=15.0,
     ),
     "update_boarding_point": ToolPrecondition(
+        # newBoardingStation is planner-filled from context — not a bare user slot
         required_slots=["pnr"],
         requires_confirmation=True,
         timeout_seconds=15.0,
     ),
 
     # ── Reminders ─────────────────────────────────────────────────────
+    # type and reminderAt are planner-filled — not user slots
     "create_reminder": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
+    # No required user input — scoped to authenticated user automatically
     "get_reminders": ToolPrecondition(cacheable=True, cache_key="reminders", timeout_seconds=10.0),
+    # reminderId is auto-filled by arg_patcher from reminders state
     "update_reminder": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
     "delete_reminder": ToolPrecondition(
+        # reminderId auto-filled by arg_patcher
         required_slots=[],
         requires_confirmation=True,
         timeout_seconds=10.0,
     ),
 
     # ── Passengers ────────────────────────────────────────────────────
+    # name/age/gender are planner-filled from conversation context — not bare slots
     "add_saved_passenger": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
+    # No required user input — scoped to authenticated user automatically
     "get_saved_passengers": ToolPrecondition(
         cacheable=True,
         cache_key="saved_passengers",
@@ -145,4 +158,5 @@ SLOT_QUESTIONS: Dict[str, str] = {
     "train_number": "Could you provide the train number?",
     "train_name": "Could you provide the train name?",
     "pnr": "Could you share the 10-digit PNR number?",
+    "station_code": "Which station would you like to check? (e.g. NDLS, BCT)",
 }

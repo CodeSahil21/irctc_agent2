@@ -1,6 +1,16 @@
 from app.graph.state import TravelState
 
-_NO_TOOL_INTENTS = {"general_question", "list_classes", "list_quotas"}
+_NO_TOOL_INTENTS = {"general_question"}
+
+# These intents have zero required user inputs and fixed empty args.
+# Skip slot_filler + tool_planner entirely — go straight to executor.
+_DIRECT_EXEC_INTENTS = {
+    "get_saved_passengers",
+    "get_booking_history",
+    "get_reminders",
+    "list_classes",
+    "list_quotas",
+}
 
 _RANKING_INTENTS = {"search_trains", "recommend_trains"}
 
@@ -9,6 +19,8 @@ def route_after_intent(state: TravelState) -> str:
     intent = state.get("intent", "general_question")
     if intent in _NO_TOOL_INTENTS:
         return "response_node"
+    if intent in _DIRECT_EXEC_INTENTS:
+        return "tool_executor_node"
     return "slot_filler_node"
 
 

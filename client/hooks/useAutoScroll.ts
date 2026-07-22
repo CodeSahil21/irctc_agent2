@@ -4,14 +4,15 @@ import { useEffect, useRef } from "react";
 
 export function useAutoScroll<T>(dep: T) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const isPinnedRef = useRef(true);
 
+  // Track whether the user has scrolled away from the bottom
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
     const handleScroll = () => {
-      if (!el) return;
       isPinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     };
 
@@ -19,11 +20,11 @@ export function useAutoScroll<T>(dep: T) {
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
+  // Scroll to bottom whenever dep changes, if pinned
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !isPinnedRef.current) return;
-    el.scrollTop = el.scrollHeight;
+    if (!isPinnedRef.current) return;
+    sentinelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [dep]);
 
-  return containerRef;
+  return { containerRef, sentinelRef };
 }

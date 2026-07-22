@@ -5,7 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.graph.arg_patcher import patch_tool_args
-from app.graph.state import TravelState, ToolCall
+from app.graph.state import TravelState
 from app.graph.tool_preconditions import get_precondition
 from app.mcp.registry import MCPToolRegistry
 from app.telemetry.logging import app_logger
@@ -117,7 +117,7 @@ async def _execute_parallel_group(
     user_email: str,
     user_name: Optional[str],
     mcp_registry: MCPToolRegistry,
-    tool_history: List[ToolCall],
+    tool_history: List[Dict[str, Any]],
     errors: List[str],
     travel: Dict[str, Any],
     parallel_results: Dict[str, Any],
@@ -155,10 +155,10 @@ async def _execute_parallel_group(
         if status == "error":
             group_had_failure = True
             errors.append(f"{name}: {parsed.get('message')}")
-            tool_history.append(ToolCall(tool=name, args=args, result=parsed, status="failed", retries=0, latency_ms=group_latency))
+            tool_history.append({"tool": name, "args": args, "result": parsed, "status": "failed", "retries": 0, "latency_ms": group_latency})
             app_logger.warning("Parallel tool failed | tool={tool}", tool=name)
         else:
-            tool_history.append(ToolCall(tool=name, args=args, result=result_data, status="success", retries=0, latency_ms=group_latency))
+            tool_history.append({"tool": name, "args": args, "result": result_data, "status": "success", "retries": 0, "latency_ms": group_latency})
             parallel_results[name] = result_data
             _apply_result(name, result_data, updates, travel)
             app_logger.info("Parallel tool succeeded | tool={tool}", tool=name)
@@ -181,7 +181,7 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
     tool_plan: List[str] = state.get("tool_plan") or []
     tool_plan_args: List[Dict[str, Any]] = state.get("tool_plan_args") or []
     current_index: int = state.get("current_tool_index") or 0
-    tool_history: List[ToolCall] = list(state.get("tool_history") or [])
+    tool_history: List[Dict[str, Any]] = list(state.get("tool_history") or [])
     retries: int = state.get("retries") or 0
     errors: List[str] = list(state.get("errors") or [])
     travel: Dict[str, Any] = dict(state.get("travel") or {})
@@ -241,11 +241,11 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
 
         if retries < precondition.max_retries and not is_schema_error:
             app_logger.warning("Tool failed, retrying | tool={tool} | attempt={n}", tool=tool_name, n=retries + 1)
-            tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=parsed, status="error", retries=retries + 1, latency_ms=latency_ms))
+            tool_history.append({"tool": tool_name, "args": tool_args, "result": parsed, "status": "error", "retries": retries + 1, "latency_ms": latency_ms})
             return {"tool_history": tool_history, "retries": retries + 1, "errors": errors}
 
         app_logger.error("Tool failed permanently or exhausted retries | tool={tool}", tool=tool_name)
-        tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=parsed, status="failed", retries=retries, latency_ms=latency_ms))
+        tool_history.append({"tool": tool_name, "args": tool_args, "result": parsed, "status": "failed", "retries": retries, "latency_ms": latency_ms})
         # Don't let a downstream destructive step (e.g. book_ticket) run after a
         # failed prerequisite — abort the rest of the plan.
         next_index = len(tool_plan) if _downstream_has_destructive(tool_plan, current_index) else current_index + 1
@@ -253,7 +253,7 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
             app_logger.warning("Aborting plan — prerequisite failed before a destructive step")
         return {"tool_history": tool_history, "current_tool_index": next_index, "retries": 0, "errors": errors}
 
-    tool_history.append(ToolCall(tool=tool_name, args=tool_args, result=result_data, status="success", retries=retries, latency_ms=latency_ms))
+    tool_history.append({"tool": tool_name, "args": tool_args, "result": result_data, "status": "success", "retries": retries, "latency_ms": latency_ms})
     updates: Dict[str, Any] = {"tool_history": tool_history, "current_tool_index": current_index + 1, "retries": 0, "errors": errors}
     _apply_result(tool_name, result_data, updates, travel)
     updates["travel"] = travel

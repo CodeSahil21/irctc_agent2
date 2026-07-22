@@ -1,18 +1,4 @@
 services:
-    ai-service:
-        build: .
-        container_name: ai_service
-        env_file:
-            - .env
-        ports:
-            - "8000:8000"
-        volumes:
-            - .:/app
-        command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-        depends_on:
-            mongo:
-                condition: service_healthy
-
     mongo:
         image: mongo:7
         container_name: irctc_mongo

@@ -27,23 +27,51 @@ from app.telemetry.logging import app_logger
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # MCP camelCase required field → internal travel-context slot
+# Only fields that map to a slot we might ask the user about are listed here.
+# Fields that are always auto-resolved (planner-filled, arg_patcher-filled, or
+# user-auth-scoped) are intentionally ABSENT so the slot filler never asks for them.
 _FIELD_TO_SLOT: Dict[str, str] = {
     "fromStation": "from_station",
     "toStation": "to_station",
     "source": "from_station",
     "destination": "to_station",
-    "stationCode": "from_station",
     "journeyDate": "date",
     "date": "date",
     "trainNumber": "train_number",
-    "trainName": "train_name",
     "travelClass": "travel_class",
-    "quota": "quota",
     "pnr": "pnr",
+    # "stationCode"  → intentionally omitted: arg_patcher fills from travel.from_station
+    # "quota"        → intentionally omitted: safe default GN always applied
+    # "trainName"    → intentionally omitted: arg_patcher fills from search results
+    # "preference"   → intentionally omitted: planner-filled (fastest/cheapest/overnight)
+    # "reminderId"   → intentionally omitted: arg_patcher fills from reminders state
+    # "reminderAt"   → intentionally omitted: planner-filled from conversation
+    # "type"         → intentionally omitted: planner-filled (JOURNEY/PNR/BOOKING)
+    # "status"       → intentionally omitted: planner-filled (BOOKED/CANCELLED/etc)
+    # "newBoardingStation" → intentionally omitted: planner-filled from context
+    # "name"/"age"/"gender" → intentionally omitted: planner-filled from conversation
+    # "query"        → intentionally omitted: planner-filled from user message
+    # "lat"/"lng"    → intentionally omitted: planner-filled
+    # "bookingId"    → intentionally omitted: arg_patcher fills from booking state
+    # "fare"         → intentionally omitted: arg_patcher fills from fare state
+    # "passengers"   → intentionally omitted: arg_patcher fills from saved_passengers
 }
 
 # Slots we may ask the user about. Everything else is auto-resolved or planner-filled.
 _ASKABLE_SLOTS = {"from_station", "to_station", "date", "travel_class", "train_number", "pnr"}
+
+# Tools that require zero user input — they are scoped to the authenticated user
+# and need no slot filling at all. Bypassed immediately.
+_ZERO_INPUT_TOOLS = {
+    "get_saved_passengers",
+    "get_booking_history",
+    "get_reminders",
+    "list_classes",
+    "list_quotas",
+    "search_stations",    # query is planner-filled from user message
+    "find_station_code",  # query is planner-filled from user message
+    "get_nearby_stations", # lat/lng are planner-filled
+}
 
 
 def _slot_filled(slot: str, value: Any) -> bool:
@@ -62,6 +90,10 @@ def _is_satisfied(field: str, slot: str, travel: Dict[str, Any], state: TravelSt
         return True
     if field == "quota":
         return True  # safe default (GN) applied by arg_patcher
+    if slot == "station_code":
+        # arg_patcher fills stationCode from travel.from_station — always satisfied
+        # if from_station is known, otherwise fall through to ask
+        return bool(travel.get("from_station"))
     if slot == "train_number":
         # Resolvable if we already have a train, prior search results, or enough
         # to run a search first (from + to + date).
@@ -124,8 +156,12 @@ def slot_filler_node(state: TravelState, mcp_registry=None) -> Dict[str, Any]:
     intent = state.get("intent", "general_question")
     travel = dict(state.get("travel") or {})
 
-    # Intent names map 1:1 to MCP tool names. Non-tool intents (general_question)
-    # have no required user slots.
+    # Zero-input tools: scoped to authenticated user, planner fills all args.
+    # Never ask the user for anything — go straight to planning.
+    if intent in _ZERO_INPUT_TOOLS:
+        return {"missing_slots": [], "pending_question": None}
+
+    # Intent names map 1:1 to MCP tool names. Unknown intents have no required slots.
     tool_name = intent
     schema = None
     if mcp_registry is not None and mcp_registry.is_known(tool_name):

@@ -26,9 +26,16 @@ export function MessageList({
   onWidgetSubmit,
   onResume,
 }: MessageListProps) {
-  const containerRef = useAutoScroll(
-    messages.length + (isAgentTyping ? 1 : 0) + (interrupt ? 1 : 0)
-  );
+  // Include last message content length so streaming chunks trigger scroll
+  const lastContent = messages[messages.length - 1]?.content?.length ?? 0;
+  const dep =
+    messages.length +
+    lastContent +
+    (isAgentTyping ? 1 : 0) +
+    (toolProgress ? 1 : 0) +
+    (interrupt ? 1 : 0);
+
+  const { containerRef, sentinelRef } = useAutoScroll(dep);
 
   return (
     <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto py-5 space-y-4">
@@ -48,6 +55,9 @@ export function MessageList({
 
       {/* Human-approval interrupt */}
       {interrupt && <InterruptDialog interrupt={interrupt} onConfirm={onResume} />}
+
+      {/* Scroll anchor — always stays at the bottom */}
+      <div ref={sentinelRef} className="h-px" />
     </div>
   );
 }

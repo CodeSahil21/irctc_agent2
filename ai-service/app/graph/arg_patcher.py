@@ -112,9 +112,12 @@ def patch_tool_args(
 
     elif tool_name == "update_boarding_point":
         fill("pnr", travel.get("pnr"))
+        # newBoardingStation — planner sets this; we also try travel context as fallback
+        fill("newBoardingStation", travel.get("from_station"))
 
     elif tool_name == "update_booking_status":
         fill("pnr", travel.get("pnr"))
+        # status is always planner-set; no auto-fill — wrong default would corrupt bookings
 
     elif tool_name == "create_reminder":
         booking = state.get("booking") or {}

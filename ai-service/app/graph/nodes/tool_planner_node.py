@@ -55,12 +55,36 @@ Rules:
 - check_availability, get_fare, and get_live_status can run in parallel after search_trains.
 - If user asks for route/schedule of multiple trains, plan one get_route call per train number.
 - Default quota to "GN" if not specified by user.
-- Always call create_tool_plan tool."""
+- Always call create_tool_plan tool.
 
-# Intents where reflection adds value (data-heavy responses)
+ZERO-INPUT TOOLS — these need NO arguments, call them directly with an empty args object:
+- get_saved_passengers  → args: {}
+- get_booking_history   → args: {}
+- get_reminders         → args: {}
+- list_classes          → args: {}
+- list_quotas           → args: {}
+
+QUERY TOOLS — set "query" from exactly what the user said, nothing else:
+- search_stations       → args: {"query": "<user text>"}
+- find_station_code     → args: {"query": "<city or station name>"}
+
+PLANNER-FILLED ARGS — never ask the user for these, derive them from context or conversation:
+- trainName     → from search_results[0].trainName
+- fare          → from get_fare result
+- passengers    → from get_saved_passengers result or selected_passengers in context
+- reminderId    → from get_reminders result
+- reminderAt    → parse from user's message (ISO datetime)
+- type          → for reminders: JOURNEY / PNR / BOOKING based on context
+- status        → for update_booking_status: BOOKED / CANCELLED / etc. based on context
+- newBoardingStation → from user message or boarding points result
+- preference    → for recommend_trains: fastest / cheapest / overnight based on user goal
+- quota         → default "GN" unless user specifies otherwise"""
+
+# Intents where reflection adds value (data-heavy, multi-field responses)
+# Deliberately excludes get_pnr, get_booking_history — simple fetches don't need quality-checking
 _REFLECT_INTENTS = {
     "search_trains", "recommend_trains", "check_availability",
-    "get_fare", "book_ticket", "get_pnr", "get_booking_history",
+    "get_fare", "book_ticket",
 }
 
 

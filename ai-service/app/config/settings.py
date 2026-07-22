@@ -36,6 +36,18 @@ class Settings(BaseSettings):
             raise ValueError("ANTHROPIC_API_KEY must be set and start with 'sk-ant'")
         return v
 
+    @field_validator("jwt_secret")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        import warnings
+        if v == "change-me":
+            warnings.warn(
+                "JWT_SECRET is set to the insecure default 'change-me'. "
+                "Set a strong secret in your .env file before deploying.",
+                stacklevel=2,
+            )
+        return v
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

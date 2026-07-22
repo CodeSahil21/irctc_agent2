@@ -170,8 +170,9 @@ def _make_manager(agent_graph, conv_manager):
                     assistant_reply=reply,
                     intent=result.get("intent"),
                     result=result,
+                    user_name=session.user_name,
                 )
-                await conv_manager.close(session.user_email)
+                await conv_manager.close(session.user_email, prefs=result.get("user_preferences"))
 
             session.pending_user_message = None
             session.pending_message_id = None
@@ -226,8 +227,9 @@ def _make_manager(agent_graph, conv_manager):
                     assistant_reply=reply,
                     intent=result.get("intent"),
                     result=result,
+                    user_name=session.user_name,
                 )
-                await conv_manager.close(session.user_email)
+                await conv_manager.close(session.user_email, prefs=result.get("user_preferences"))
 
             session.pending_user_message = None
             session.pending_message_id = None

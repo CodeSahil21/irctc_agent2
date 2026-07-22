@@ -108,6 +108,7 @@ class ConversationManager:
         assistant_reply: str,
         intent: Optional[str],
         result: Dict[str, Any],
+        user_name: Optional[str] = None,
     ) -> None:
         """
         Persist one complete turn:
@@ -124,7 +125,7 @@ class ConversationManager:
                 ConversationDoc(
                     conversation_id=conversation_id,
                     user_email=user_email,
-                    user_name=result.get("user_name"),
+                    user_name=user_name,
                     title=user_message[:80],
                 ),
             )

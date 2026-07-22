@@ -19,7 +19,6 @@ router = APIRouter()
     summary="Send a message to Claude (Non-streaming)",
     description="Validates input, sends conversation history to ChatService, and returns a JSON response.",
 )
-
 @traceable(name="POST /chat", run_type="chain")
 async def create_chat_completion(
     request: ChatRequest,
@@ -54,7 +53,6 @@ async def create_chat_completion(
     summary="Stream Claude response token-by-token",
     description="Establishes an SSE stream emitting JSON tokens in real-time.",
 )
-
 @traceable(name="POST /chat/stream", run_type="chain")
 async def stream_chat_completion(
     request: ChatRequest,
@@ -168,8 +166,9 @@ async def run_agent(
             assistant_reply=reply,
             intent=result.get("intent"),
             result=result,
+            user_name=request.user_name,
         )
-        await conv_manager.close(request.user_email)
+        await conv_manager.close(request.user_email, prefs=result.get("user_preferences"))
 
     interrupted = result.get("confirmation_required") and not result.get("confirmed")
 

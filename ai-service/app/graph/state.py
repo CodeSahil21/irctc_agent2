@@ -30,7 +30,7 @@ class ExecutionMetrics(TypedDict, total=False):
     claude_calls: Optional[int]
 
 
-class ToolCall(TypedDict):
+class ToolCall(TypedDict, total=False):
     tool: str
     args: Dict[str, Any]
     result: Optional[Any]

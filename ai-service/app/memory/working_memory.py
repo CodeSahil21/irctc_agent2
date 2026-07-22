@@ -1,7 +1,7 @@
 import time
 from typing import Any, Dict
 
-from app.graph.state import ExecutionMetrics, TravelState
+from app.graph.state import TravelState
 
 
 def get_working_snapshot(state: TravelState) -> Dict[str, Any]:
@@ -34,8 +34,29 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
     """
     Returns the fields that should be reset at the start of each new user turn.
     Called by intent_node to clear stale planning state.
+
+    Continuity rules:
+    - travel context (from_station, to_station, date, train_number, pnr) always persists
+      via the checkpointer — NOT reset here.
+    - search_results, availability, fare persist only when the new intent is a
+      continuation of the current search/booking flow. They are cleared when the
+      user starts a new search (new stations or date detected by intent_node) so
+      the planner doesn't reuse stale results for a different journey.
+    - tool_results (generic bucket) is always cleared — it's turn-scoped data
+      (route, live_status, platform etc.) that is not reusable across turns.
+    - booking and reminders are cleared — they are surfaced per-turn in response_node.
+    - saved_passengers intentionally persists — fetched once per session, reused for booking.
     """
-    return {
+    # Intents that are continuations of a search — keep search_results/fare/availability
+    _CONTINUATION_INTENTS = {
+        "check_availability", "get_fare", "book_ticket",
+        "get_seat_map", "get_boarding_points", "get_route",
+        "get_train_schedule", "get_live_status", "get_platform",
+    }
+    current_intent = state.get("intent") or ""
+    is_continuation = current_intent in _CONTINUATION_INTENTS
+
+    resets: Dict[str, Any] = {
         "tool_plan": None,
         "tool_plan_args": None,
         "current_tool_index": None,
@@ -45,28 +66,39 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "pending_question": None,
         "errors": [],
         "retries": 0,
-        # Clear per-turn advanced features
         "parallel_results": {},
-        "tool_results": {},
+        "tool_results": {},           # always cleared — turn-scoped
         "reflection_required": None,
         "reflection_passed": None,
         "reflection_feedback": "",
-        "ranked_results": None,
-        "booking": None,
-        "reminders": None,
-        "execution_metrics": ExecutionMetrics(
-            turn_start_time=time.time(),
-            tools_called=0,
-            total_latency_ms=0.0,
-            claude_calls=0,
-        ),
+        "booking": None,              # cleared — surfaced fresh each turn
+        "reminders": None,            # cleared — fetched fresh when needed
+        "execution_metrics": {
+            "turn_start_time": time.time(),
+            "tools_called": 0,
+            "total_latency_ms": 0.0,
+            "claude_calls": 0,
+        },
         "turn_count": (state.get("turn_count") or 0) + 1,
     }
 
+    if not is_continuation:
+        # New search or unrelated intent — clear stale search pipeline results
+        # so the planner doesn't reuse them for a different journey
+        resets["search_results"] = None
+        resets["ranked_results"] = None
+        resets["availability"] = None
+        resets["fare"] = None
+    else:
+        # Continuation — only clear ranked_results (re-ranked each time)
+        resets["ranked_results"] = None
 
-def increment_tool_metric(state: TravelState, latency_ms: float) -> ExecutionMetrics:
+    return resets
+
+
+def increment_tool_metric(state: TravelState, latency_ms: float) -> dict:
     """Return updated execution metrics after a tool call."""
     m = dict(state.get("execution_metrics") or {})
     m["tools_called"] = (m.get("tools_called") or 0) + 1
     m["total_latency_ms"] = (m.get("total_latency_ms") or 0.0) + latency_ms
-    return ExecutionMetrics(**m)
+    return m

@@ -67,7 +67,11 @@ def create_agent_graph(
     builder.add_conditional_edges(
         "intent_node",
         route_after_intent,
-        {"response_node": "response_node", "slot_filler_node": "slot_filler_node"},
+        {
+            "response_node": "response_node",
+            "slot_filler_node": "slot_filler_node",
+            "tool_executor_node": "tool_executor_node",
+        },
     )
 
     builder.add_conditional_edges(
