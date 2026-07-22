@@ -1,5 +1,4 @@
 import json
-from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
@@ -122,12 +121,14 @@ async def run_agent(
     config = {"configurable": {"thread_id": conversation_id}}
 
     # Phase 10 — open conversation (loads prefs, creates/loads conv doc)
+    user_preferences = None
     if request.user_email:
-        await conv_manager.open(
+        conv = await conv_manager.open(
             conversation_id=conversation_id,
             user_email=request.user_email,
             user_name=request.user_name,
         )
+        user_preferences = conv.get("preferences")
 
     try:
         if request.resume:
@@ -139,6 +140,7 @@ async def run_agent(
                 "travel": request.travel_context or {},
                 "user_email": request.user_email,
                 "user_name": request.user_name,
+                "user_preferences": user_preferences,
                 "search_results": request.search_results,
                 "selected_train": request.selected_train,
                 "availability": request.availability,

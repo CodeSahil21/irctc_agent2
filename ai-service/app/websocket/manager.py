@@ -21,8 +21,7 @@ Event flow per query:
   client → resume          {id, approved: bool}
 """
 import asyncio
-import time
-from typing import Any, Optional
+from typing import Optional
 import nanoid
 import socketio
 from langchain_core.messages import HumanMessage
@@ -113,18 +112,21 @@ def _make_manager(agent_graph, conv_manager):
         await sio.emit(events.AGENT_TYPING, {"isTyping": True}, to=sid)
 
         # Open conversation (loads prefs)
+        user_preferences = None
         if session.user_email:
-            await conv_manager.open(
+            conv = await conv_manager.open(
                 conversation_id=conversation_id,
                 user_email=session.user_email,
                 user_name=session.user_name,
             )
+            user_preferences = conv.get("preferences")
 
         try:
             initial_state = {
                 "messages": [HumanMessage(content=content)],
                 "user_email": session.user_email,
                 "user_name": session.user_name,
+                "user_preferences": user_preferences,
             }
 
             # Stream graph execution with event callbacks

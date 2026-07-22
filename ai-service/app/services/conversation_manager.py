@@ -34,11 +34,10 @@ class ConversationManager:
     ) -> Dict[str, Any]:
         """
         Load existing conversation or create a new one.
-        Hydrates the preference cache from DB.
-        Returns the conversation doc as a dict.
+        Loads the user's preferences from DB and attaches them to the returned
+        doc under `preferences` so the caller can seed graph state with them.
         """
-        # Hydrate Layer 3 preference cache
-        await load_preferences_from_db(self._db, user_email)
+        prefs = await load_preferences_from_db(self._db, user_email)
 
         existing = await get_conversation(self._db, conversation_id)
         if existing:
@@ -47,6 +46,7 @@ class ConversationManager:
                 id=conversation_id,
                 turns=existing.get("turn_count", 0),
             )
+            existing["preferences"] = prefs
             return existing
 
         # New conversation
@@ -57,11 +57,14 @@ class ConversationManager:
         )
         await upsert_conversation(self._db, doc)
         app_logger.info("Conversation created | id={id}", id=conversation_id)
-        return doc.model_dump()
+        result = doc.model_dump()
+        result["preferences"] = prefs
+        return result
 
-    async def close(self, user_email: str) -> None:
-        """Flush in-process preference cache to MongoDB."""
-        await persist_preferences(self._db, user_email)
+    async def close(self, user_email: str, prefs: Optional[Dict[str, Any]] = None) -> None:
+        """Persist any updated preferences for this user. No-op when none changed."""
+        if prefs:
+            await persist_preferences(self._db, user_email, prefs)
 
     # ── Context Building ──────────────────────────────────────────────
 

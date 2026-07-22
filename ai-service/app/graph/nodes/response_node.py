@@ -1,5 +1,7 @@
 # graph/nodes/response_node.py
-from typing import Any, Dict
+import json
+import re
+from typing import Any, Dict, Set
 
 from langchain_core.messages import AIMessage
 
@@ -7,6 +9,37 @@ from app.graph.state import TravelState
 from app.memory.context_builder import build_tool_context
 from app.memory.conversation_memory import format_for_claude
 from app.services.claude import ClaudeService
+from app.telemetry.logging import app_logger
+
+# Indian Railways PNRs are 10 digits. Guard against the model surfacing any PNR
+# that is not present verbatim in the grounded tool data.
+_PNR_RE = re.compile(r"\b\d{10}\b")
+
+
+def _grounded_pnrs(state: TravelState) -> Set[str]:
+    blob = json.dumps(
+        {
+            "booking": state.get("booking"),
+            "travel": state.get("travel"),
+            "tool_results": state.get("tool_results"),
+        },
+        default=str,
+    )
+    return set(_PNR_RE.findall(blob))
+
+
+def _ground_response(reply: str, state: TravelState) -> str:
+    """Redact any 10-digit PNR the model emits that isn't in the tool data."""
+    allowed = _grounded_pnrs(state)
+
+    def _replace(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        if token in allowed:
+            return token
+        app_logger.warning("Redacted ungrounded PNR from response | pnr={pnr}", pnr=token)
+        return "[PNR unavailable]"
+
+    return _PNR_RE.sub(_replace, reply)
 
 _SYSTEM = """You are the official IRCTC AI Travel Assistant. Generate a helpful, accurate response \
 based on the tool results and travel context provided.
@@ -61,5 +94,7 @@ async def response_node(state: TravelState, claude_service: ClaudeService) -> Di
         block.text for block in raw_response.content
         if getattr(block, "type", None) == "text"
     )
+
+    reply = _ground_response(reply, state)
 
     return {"messages": [AIMessage(content=reply)]}

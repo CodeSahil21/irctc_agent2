@@ -92,21 +92,21 @@ TOOL_PRECONDITIONS: Dict[str, ToolPrecondition] = {
         timeout_seconds=20.0,
     ),
     "cancel_ticket": ToolPrecondition(
-        required_slots=[],
+        required_slots=["pnr"],
         requires_confirmation=True,
         max_retries=1,
         timeout_seconds=20.0,
     ),
-    "get_pnr": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
-    "get_booking": ToolPrecondition(required_slots=[], timeout_seconds=10.0),
+    "get_pnr": ToolPrecondition(required_slots=["pnr"], timeout_seconds=10.0),
+    "get_booking": ToolPrecondition(required_slots=["pnr"], timeout_seconds=10.0),
     "get_booking_history": ToolPrecondition(cacheable=True, timeout_seconds=10.0),
     "update_booking_status": ToolPrecondition(
-        required_slots=[],
+        required_slots=["pnr"],
         requires_confirmation=True,
         timeout_seconds=15.0,
     ),
     "update_boarding_point": ToolPrecondition(
-        required_slots=[],
+        required_slots=["pnr"],
         requires_confirmation=True,
         timeout_seconds=15.0,
     ),
@@ -144,4 +144,5 @@ SLOT_QUESTIONS: Dict[str, str] = {
     "quota": "Which quota would you like? (GN for General, TQ for Tatkal, etc.)",
     "train_number": "Could you provide the train number?",
     "train_name": "Could you provide the train name?",
+    "pnr": "Could you share the 10-digit PNR number?",
 }

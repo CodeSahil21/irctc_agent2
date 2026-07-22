@@ -50,6 +50,8 @@ Rules:
 - Use cached context from TravelState — do not repeat already-completed steps.
 - For recommend_trains, set preference to "fastest", "cheapest", or "overnight" based on user goal.
 - For create_reminder and update_reminder, use param name "type" (values: JOURNEY, PNR, BOOKING).
+- To update or delete a reminder, first call get_reminders to obtain the reminderId, then use that id.
+- For pnr/cancel/booking tools, use the PNR from context if present; otherwise call get_booking_history first.
 - check_availability, get_fare, and get_live_status can run in parallel after search_trains.
 - If user asks for route/schedule of multiple trains, plan one get_route call per train number.
 - Default quota to "GN" if not specified by user.
