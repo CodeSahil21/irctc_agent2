@@ -65,12 +65,10 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "reflection_feedback": "",
         "ranked_results": None,
         # Clear stale tool result fields so previous turn data doesn't bleed in
-        "search_results": [],
-        "availability": None,
-        "fare": None,
+        # NOTE: search_results, availability, fare, saved_passengers are intentionally
+        # kept across turns so the planner can skip re-fetching them for booking flow.
         "booking": None,
         "reminders": None,
-        "saved_passengers": None,
         "execution_metrics": ExecutionMetrics(
             turn_start_time=time.time(),
             tools_called=0,

@@ -13,6 +13,7 @@ class TravelContext(TypedDict, total=False):
     train_number: Optional[str]
     train_name: Optional[str]
     pnr: Optional[str]
+    selected_passengers: Optional[List[Dict[str, Any]]]  # passengers chosen for booking
 
 
 class UserPreferences(TypedDict, total=False):

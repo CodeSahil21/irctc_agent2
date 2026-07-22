@@ -101,6 +101,11 @@ _INTENT_TOOL = {
             "quota": {"type": "string", "description": "Quota code if mentioned (GN, TQ, LD, PT, HO, SS)."},
             "train_number": {"type": "string", "description": "Train number if mentioned."},
             "pnr": {"type": "string", "description": "PNR number if mentioned."},
+            "selected_passenger_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Names of passengers the user selected for booking (e.g. ['Sahil', 'Rahul Sharma']). Extract when user says 'only X', 'book for X', 'both', etc.",
+            },
         },
         "required": ["intent", "user_goal"],
     },
@@ -145,6 +150,19 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
         existing_travel["date"] = _normalize_date(tool_input["date"])
     if tool_input.get("pnr"):
         existing_travel["pnr"] = tool_input["pnr"]
+
+    # Resolve selected passenger names against saved passengers in state
+    selected_names = tool_input.get("selected_passenger_names") or []
+    if selected_names:
+        saved = state.get("saved_passengers") or []
+        if saved:
+            names_lower = [n.lower() for n in selected_names]
+            matched = [p for p in saved if p.get("name", "").lower() in names_lower]
+            if matched:
+                existing_travel["selected_passengers"] = matched
+        # "both" / "all" → keep all saved passengers
+        if any(w in " ".join(selected_names).lower() for w in ("both", "all")):
+            existing_travel["selected_passengers"] = state.get("saved_passengers") or []
 
     # Layer 3 — load user preferences and apply to travel context
     user_email = state.get("user_email") or ""

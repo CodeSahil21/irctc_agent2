@@ -37,9 +37,13 @@ produce an ordered list of tool calls needed to fulfill the request.
 
 Rules:
 - Check each tool's schema properties before creating args. Only include parameters defined in the schema.
-- If required parameters for a tool are missing from user context, do not speculate — plan prior tools (e.g. find_station_code) to retrieve them.
 - Use station codes (e.g. NDLS, BCT) not city names in tool args.
 - If station codes are unknown, start with find_station_code.
+- NEVER ask the user for data you can fetch via a tool. Auto-fetch:
+  - saved passengers → get_saved_passengers (before book_ticket if no passengers in context)
+  - boarding points → get_boarding_points (if user asks which stop to board)
+  - station code → find_station_code
+- For booking: if search_results already in context, skip search and go straight to check_availability → get_fare → book_ticket.
 - For booking: search_trains → check_availability → get_fare → book_ticket.
 - For live status: search_train_by_number → get_live_status.
 - Never include book_ticket, cancel_ticket, update_boarding_point, delete_reminder without prior steps.

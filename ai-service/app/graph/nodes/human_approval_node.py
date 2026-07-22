@@ -12,8 +12,10 @@ def _build_confirmation_prompt(state: TravelState) -> str:
     intent = state.get("intent", "")
     travel = state.get("travel") or {}
     fare = state.get("fare") or {}
-    passengers = state.get("passengers") or []
     booking = state.get("booking") or {}
+
+    # Prefer explicitly selected passengers, fall back to all saved
+    passengers = travel.get("selected_passengers") or state.get("saved_passengers") or []
 
     lines = ["**Please confirm the following action:**\n"]
 
@@ -52,9 +54,13 @@ def human_approval_node(state: TravelState) -> Dict[str, Any]:
     app_logger.info("Human approval required | intent={intent}", intent=state.get("intent"))
 
     # LangGraph interrupt — pauses graph execution and surfaces the prompt to the caller
-    user_response: str = interrupt({"confirmation_prompt": prompt})
+    # Resume value can be a boolean (from client) or a string like "yes"/"no"
+    user_response = interrupt({"confirmation_prompt": prompt})
 
-    confirmed = str(user_response).strip().lower() in ("yes", "y", "confirm", "ok", "proceed")
+    if isinstance(user_response, bool):
+        confirmed = user_response
+    else:
+        confirmed = str(user_response).strip().lower() in ("yes", "y", "confirm", "ok", "proceed", "true")
     app_logger.info("Human approval response | confirmed={confirmed}", confirmed=confirmed)
 
     return {

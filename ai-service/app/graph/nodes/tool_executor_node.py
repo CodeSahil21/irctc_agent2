@@ -208,8 +208,9 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
         # Ensure passengers is always a list of dicts, never a string
         passengers = tool_args.get("passengers")
         if not isinstance(passengers, list) or not passengers:
-            saved = state.get("saved_passengers") or []
-            if saved:
+            # Prefer explicitly selected passengers, then all saved passengers
+            selected = travel.get("selected_passengers") or state.get("saved_passengers") or []
+            if selected:
                 tool_args["passengers"] = [
                     {
                         "name": p.get("name", ""),
@@ -217,7 +218,7 @@ async def tool_executor_node(state: TravelState, mcp_registry: MCPToolRegistry) 
                         "gender": p.get("gender", "MALE"),
                         "berthPreference": p.get("berthPreference"),
                     }
-                    for p in saved
+                    for p in selected
                 ]
             else:
                 tool_args["passengers"] = [{"name": "Passenger 1", "age": 25, "gender": "MALE"}]

@@ -49,7 +49,7 @@ def build_tool_context(state: TravelState) -> str:
         parts.append("Errors encountered:\n" + "\n".join(state["errors"]))
     if state.get("pending_question"):
         parts.append(f"Ask the user: {state['pending_question']}")
-    if state.get("confirmed") is False:
+    if state.get("confirmed") is False and state.get("confirmation_prompt"):
         parts.append("User declined the action. Acknowledge and offer alternatives.")
 
     return "\n\n".join(parts) if parts else ""
@@ -70,16 +70,22 @@ def build_planner_context(state: TravelState, tools_summary: str) -> str:
         parts.append(f"Travel context: {json.dumps(travel)}")
 
     # Cached results — tell planner what's already done
-    if state.get("search_results") or state.get("ranked_results"):
-        parts.append("Search results: already available in state")
+    results = state.get("search_results") or state.get("ranked_results")
+    if results:
+        # Give planner the actual train data so it can build check_availability/get_fare args
+        parts.append(f"Search results (already fetched):\n{json.dumps(results, indent=2)}")
     if state.get("selected_train"):
         parts.append(f"Selected train: {json.dumps(state['selected_train'])}")
     if state.get("availability"):
-        parts.append("Availability: already checked")
+        parts.append(f"Availability (already checked): {json.dumps(state['availability'])}")
     if state.get("fare"):
-        parts.append("Fare: already fetched")
+        parts.append(f"Fare (already fetched): {json.dumps(state['fare'])}")
     if state.get("passengers"):
         parts.append(f"Passengers: {len(state['passengers'])} passenger(s) ready")
+    if travel.get("selected_passengers"):
+        parts.append(f"Selected passengers for booking: {json.dumps(travel['selected_passengers'])}")
+    elif state.get("saved_passengers"):
+        parts.append(f"Saved passengers: {json.dumps(state['saved_passengers'])}")
     if state.get("tool_results"):
         done = ", ".join(state["tool_results"].keys())
         parts.append(f"Already executed (results cached): {done}")
