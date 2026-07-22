@@ -53,6 +53,9 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "get_seat_map", "get_boarding_points", "get_route",
         "get_train_schedule", "get_live_status", "get_platform",
     }
+    # Use the INCOMING intent from the new message (passed in state after intent_node
+    # has already updated it) — not the stale previous-turn intent.
+    # reset_turn_state is called at the END of intent_node after intent is set.
     current_intent = state.get("intent") or ""
     is_continuation = current_intent in _CONTINUATION_INTENTS
 

@@ -242,7 +242,12 @@ async def intent_node(state: TravelState, claude_service: ClaudeService) -> Dict
 
     app_logger.info("Intent classified | intent={intent} | goal={goal}", intent=intent, goal=user_goal)
 
-    updates = reset_turn_state(state)
+    # Reset per-turn state AFTER intent is known so working_memory continuity logic
+    # can check the NEW intent (not the stale previous-turn one).
+    # Temporarily patch intent into state so reset_turn_state sees it.
+    patched_state = dict(state)
+    patched_state["intent"] = intent
+    updates = reset_turn_state(patched_state)
     updates.update({
         "intent": intent,
         "user_goal": user_goal,
