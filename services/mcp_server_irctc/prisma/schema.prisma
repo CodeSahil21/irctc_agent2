@@ -71,6 +71,7 @@ model Booking {
   userId         String
   pnr            String?       @unique
   transactionId  String?
+  idempotencyKey String?       @unique
   trainNumber    String
   trainName      String
   source         String

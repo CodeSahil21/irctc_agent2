@@ -24,7 +24,12 @@ export async function recommendTrainsTool(params: RecommendTrainsParams): Promis
     if (preference === "fastest") return (a.durationMins as number) - (b.durationMins as number);
     if (preference === "overnight") {
       const hour = (t: any) => parseInt(t.departure?.split(":")[0] ?? "12");
-      return hour(b) >= 18 ? 1 : hour(a) >= 18 ? -1 : 0;
+      const aIsOvernight = hour(a) >= 18;
+      const bIsOvernight = hour(b) >= 18;
+      // Overnight trains first; among ties, earlier departure wins
+      if (aIsOvernight && !bIsOvernight) return -1;
+      if (!aIsOvernight && bIsOvernight) return 1;
+      return hour(a) - hour(b);
     }
     return 0;
   });

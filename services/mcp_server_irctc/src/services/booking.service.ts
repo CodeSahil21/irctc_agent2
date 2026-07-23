@@ -17,13 +17,28 @@ export async function createBooking(data: {
     quota: string;
     fare: number;
     passengerCount: number;
+    idempotencyKey?: string;
 }) {
-    return prisma.booking.create({
-        data: {
-            ...data,
-            pnr: generatePnr(),
-            status: BookingStatus.BOOKED,
-            bookedAt: new Date(),
-        },
-    });
+    // Retry on PNR collision (unique constraint); up to 5 attempts before giving up
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+            return await prisma.booking.create({
+                data: {
+                    ...data,
+                    pnr: generatePnr(),
+                    status: BookingStatus.BOOKED,
+                    bookedAt: new Date(),
+                },
+            });
+        } catch (err: any) {
+            const isUniqueViolation =
+                err?.code === "P2002" &&
+                (err?.meta?.target as string[] | undefined)?.includes("pnr");
+            if (!isUniqueViolation || attempt === MAX_ATTEMPTS) throw err;
+            // else: retry with a freshly generated PNR
+        }
+    }
+    // TypeScript requires an explicit unreachable return; the loop always throws or returns
+    throw new Error("Unreachable");
 }

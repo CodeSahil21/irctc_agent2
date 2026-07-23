@@ -15,11 +15,11 @@ Every request to `/mcp` requires these HTTP headers:
 
 | Header           | Required           | Description                                                                       |
 | ---------------- | ------------------ | --------------------------------------------------------------------------------- |
-| `x-user-email`   | Yes                | Authenticated user's email — used to scope all user tools                         |
+| `x-user-email`   | Yes                | Authenticated user's email — scopes all user-specific tools                       |
 | `x-user-name`    | No                 | User's display name                                                               |
-| `mcp-session-id` | No (first request) | Session ID returned after first request — must be sent on all subsequent requests |
+| `mcp-session-id` | No (first request) | Session ID returned after the first request — must be sent on all subsequent ones |
 
-**First request** — do not send `mcp-session-id`. The server creates a new session and returns the session ID in the response headers as `mcp-session-id`. Send it on every request after that.
+**First request** — omit `mcp-session-id`. The server creates a new session and returns its ID in the response header `mcp-session-id`. Include it on every request after that.
 
 ---
 
@@ -49,7 +49,7 @@ Every request to `/mcp` requires these HTTP headers:
 | `HO` | Higher Official |
 | `SS` | Senior Citizen  |
 
-### Booking Status Values
+### Booking Statuses
 
 `PENDING` `BOOKED` `RAC` `WL` `CANCELLED` `FAILED`
 
@@ -61,61 +61,113 @@ Every request to `/mcp` requires these HTTP headers:
 
 `MALE` `FEMALE` `OTHER`
 
+### Berth Preferences
+
+`LB` (Lower) `MB` (Middle) `UB` (Upper) `SL` (Side Lower) `SUB` / `SU` (Side Upper) `WS` (Window Seat)
+
 ---
 
-## MCP JSON Request Structure
-
-Every tool call follows this structure:
+## MCP Request Structure
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-        "name": "<tool_name>",
-        "arguments": {}
-    }
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "<tool_name>",
+    "arguments": {}
+  }
 }
 ```
 
 ---
 
-## Tools
+## Session Flow
+
+```
+1. POST /mcp  (no mcp-session-id header)
+   → Server creates session, returns mcp-session-id in response header
+
+2. Store mcp-session-id
+
+3. All subsequent requests include mcp-session-id
+   → Server routes to existing session
+
+4. DELETE /mcp  (with mcp-session-id)
+   → Server closes and removes session
+```
+
+---
+
+## Tool Quick Reference
+
+| # | Tool | Category | Side Effects |
+|---|------|----------|--------------|
+| 1 | `search_trains` | Public | None |
+| 2 | `check_availability` | Public | None |
+| 3 | `get_fare` | Public | None |
+| 4 | `get_seat_map` | Public | None |
+| 5 | `get_boarding_points` | Public | None |
+| 6 | `get_live_status` | Public | None |
+| 7 | `get_platform` | Public | None |
+| 8 | `get_train_details` | Public | None |
+| 9 | `get_reference_data` | Public | None |
+| 10 | `find_station` | Public | None |
+| 11 | `recommend_trains` | Public | None |
+| 12 | `book_ticket` | User | Creates booking |
+| 13 | `cancel_ticket` | User | Cancels booking (irreversible) |
+| 14 | `track_booking` | User | Optionally upserts tracking record |
+| 15 | `get_booking_history` | User | None |
+| 16 | `update_booking` | User | Updates status / boarding point |
+| 17 | `manage_reminder` | User | Creates / updates / deletes reminder |
+| 18 | `add_saved_passenger` | User | Saves passenger profile |
+| 19 | `get_saved_passengers` | User | None |
+
+---
+
+## Typical Booking Flow
+
+```
+1. find_station          → resolve city/name to station code (skip if you already have a code)
+2. search_trains         → list all trains on the route and date
+   — OR —
+   recommend_trains      → get top 5 ranked by fastest / cheapest / overnight (includes availability + fare)
+3. check_availability    → confirm seats available for chosen train + class + quota
+4. get_fare              → get exact fare breakdown
+5. book_ticket           → create the booking, receive PNR
+6. update_booking        → set status=BOOKED + transactionId after payment
+7. manage_reminder       → set a journey reminder (action="create", type="JOURNEY")
+8. track_booking         → check current status any time using the PNR
+```
+
+---
+
+## Public Tools
 
 ---
 
 ### 1. `search_trains`
 
-Search trains between two stations on a given date.
-
-**Category**: Public
+Search all trains running between two stations on a specific date. Primary entry point for "find me a train from X to Y" requests. Returns a list of trains with timing, duration, and available classes — but **not** live availability or fare. Call `check_availability` and `get_fare` separately, or use `recommend_trains` for a ranked shortlist with both already included.
 
 **Input**
 
-| Field         | Type   | Required | Description                         |
-| ------------- | ------ | -------- | ----------------------------------- |
-| `fromStation` | string | Yes      | Origin station code e.g. `NDLS`     |
-| `toStation`   | string | Yes      | Destination station code e.g. `BCT` |
-| `journeyDate` | string | Yes      | Journey date in `YYYY-MM-DD` format |
-| `quota`       | string | No       | Quota code. Default: `GN`           |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fromStation` | string | Yes | Origin station code (e.g. `NDLS`). Use `find_station` to resolve a name first. |
+| `toStation` | string | Yes | Destination station code (e.g. `BCT`). Use `find_station` to resolve a name first. |
+| `journeyDate` | string | Yes | Journey date `YYYY-MM-DD`. |
+| `quota` | string | No | Quota code. Default: `GN`. Options: `GN` `LD` `TQ` `PT` `HO` `SS`. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-        "name": "search_trains",
-        "arguments": {
-            "fromStation": "NDLS",
-            "toStation": "BCT",
-            "journeyDate": "2025-08-15",
-            "quota": "GN"
-        }
-    }
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "search_trains", "arguments": {
+    "fromStation": "NDLS", "toStation": "BCT", "journeyDate": "2025-08-15", "quota": "GN"
+  }}
 }
 ```
 
@@ -125,35 +177,25 @@ Search trains between two stations on a given date.
 
 ### 2. `check_availability`
 
-Check seat availability for a train on a given date.
-
-**Category**: Public
+Check real-time seat availability (AVAILABLE / RAC / WL and count) for one specific train, class, and quota on a given date. Use after `search_trains` once the user picks a train, or for "is there a seat on train X" questions. Not for comparing multiple trains — use `recommend_trains` for that.
 
 **Input**
 
-| Field         | Type   | Required | Description                            |
-| ------------- | ------ | -------- | -------------------------------------- |
-| `trainNumber` | string | Yes      | Train number e.g. `12951`              |
-| `travelClass` | string | Yes      | Class code e.g. `SL`, `3A`, `2A`, `1A` |
-| `quota`       | string | Yes      | Quota code e.g. `GN`, `TQ`             |
-| `journeyDate` | string | Yes      | `YYYY-MM-DD`                           |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number, e.g. `12951`. |
+| `travelClass` | string | Yes | Class code: `SL` `3A` `2A` `1A` `CC` `EC` `2S` `VS`. |
+| `quota` | string | Yes | Quota code: `GN` `LD` `TQ` `PT` `HO` `SS`. |
+| `journeyDate` | string | Yes | `YYYY-MM-DD`. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {
-        "name": "check_availability",
-        "arguments": {
-            "trainNumber": "12951",
-            "travelClass": "3A",
-            "quota": "GN",
-            "journeyDate": "2025-08-15"
-        }
-    }
+  "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+  "params": { "name": "check_availability", "arguments": {
+    "trainNumber": "12951", "travelClass": "3A", "quota": "GN", "journeyDate": "2025-08-15"
+  }}
 }
 ```
 
@@ -163,37 +205,26 @@ Check seat availability for a train on a given date.
 
 ### 3. `get_fare`
 
-Get fare for a train between two stations.
-
-**Category**: Public
+Get the exact fare with full breakdown (base fare, reservation charge, superfast charge, GST, total) for one train, class, and quota between two stations. Use when the user has a specific train+class in mind and asks "how much will it cost". For comparing prices across multiple trains, use `recommend_trains` with `preference="cheapest"` instead.
 
 **Input**
 
-| Field         | Type   | Required | Description              |
-| ------------- | ------ | -------- | ------------------------ |
-| `trainNumber` | string | Yes      | Train number             |
-| `travelClass` | string | Yes      | Class code               |
-| `quota`       | string | Yes      | Quota code               |
-| `fromStation` | string | Yes      | Origin station code      |
-| `toStation`   | string | Yes      | Destination station code |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number. |
+| `travelClass` | string | Yes | Class code. |
+| `quota` | string | Yes | Quota code. |
+| `fromStation` | string | Yes | Boarding station code. |
+| `toStation` | string | Yes | Destination station code. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": {
-        "name": "get_fare",
-        "arguments": {
-            "trainNumber": "12951",
-            "travelClass": "SL",
-            "quota": "GN",
-            "fromStation": "NDLS",
-            "toStation": "BCT"
-        }
-    }
+  "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+  "params": { "name": "get_fare", "arguments": {
+    "trainNumber": "12951", "travelClass": "SL", "quota": "GN", "fromStation": "NDLS", "toStation": "BCT"
+  }}
 }
 ```
 
@@ -201,103 +232,53 @@ Get fare for a train between two stations.
 
 ---
 
-### 4. `get_route`
+### 4. `get_seat_map`
 
-Get full route and all stops of a train.
-
-**Category**: Public
+Get a coach-by-coach seat map (total / booked / available seats per coach) for one train, class, and date. Use only when the user wants coach-level detail (e.g. "which coach has the most free seats"). For a simple availability check, use `check_availability` — it's cheaper and usually sufficient.
 
 **Input**
 
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number. |
+| `travelClass` | string | Yes | Class code. |
+| `journeyDate` | string | Yes | `YYYY-MM-DD`. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 4,
-    "method": "tools/call",
-    "params": {
-        "name": "get_route",
-        "arguments": {
-            "trainNumber": "12301"
-        }
-    }
+  "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+  "params": { "name": "get_seat_map", "arguments": {
+    "trainNumber": "12951", "travelClass": "SL", "journeyDate": "2025-08-15"
+  }}
 }
 ```
 
-**Response fields**: `trainNumber`, `stops[]` — each stop has `stopNumber`, `stationCode`, `stationName`, `city`, `arrival`, `departure`, `day`, `distance`
+**Response fields**: `trainNumber`, `travelClass`, `journeyDate`, `coaches[]` — each has `coach`, `totalSeats`, `bookedSeats`, `availableSeats`
 
 ---
 
-### 5. `get_seat_map`
+### 5. `get_boarding_points`
 
-Get coach-wise seat availability map for a train.
-
-**Category**: Public
+List all valid boarding (pickup) points for a train from the user's intended station. Use when the user asks "can I board from an earlier station" or before calling `update_booking` to change a boarding point, to show valid options first.
 
 **Input**
 
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
-| `travelClass` | string | Yes      | Class code   |
-| `journeyDate` | string | Yes      | `YYYY-MM-DD` |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number. |
+| `fromStation` | string | Yes | The station code the user currently intends to board from. |
+| `journeyDate` | string | Yes | `YYYY-MM-DD`. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 5,
-    "method": "tools/call",
-    "params": {
-        "name": "get_seat_map",
-        "arguments": {
-            "trainNumber": "12951",
-            "travelClass": "SL",
-            "journeyDate": "2025-08-15"
-        }
-    }
-}
-```
-
-**Response fields**: `trainNumber`, `travelClass`, `journeyDate`, `coaches[]` — each coach has `coach`, `totalSeats`, `bookedSeats`, `availableSeats`
-
----
-
-### 6. `get_boarding_points`
-
-Get available boarding points for a train from a station.
-
-**Category**: Public
-
-**Input**
-
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
-| `fromStation` | string | Yes      | Station code |
-| `journeyDate` | string | Yes      | `YYYY-MM-DD` |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 6,
-    "method": "tools/call",
-    "params": {
-        "name": "get_boarding_points",
-        "arguments": {
-            "trainNumber": "12951",
-            "fromStation": "NDLS",
-            "journeyDate": "2025-08-15"
-        }
-    }
+  "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+  "params": { "name": "get_boarding_points", "arguments": {
+    "trainNumber": "12951", "fromStation": "NDLS", "journeyDate": "2025-08-15"
+  }}
 }
 ```
 
@@ -305,241 +286,100 @@ Get available boarding points for a train from a station.
 
 ---
 
-### 7. `search_train_by_number`
+### 6. `get_live_status`
 
-Get train details by train number.
-
-**Category**: Public
+Get the current running status of a train — last station crossed, next station, delay in minutes. Use for "where is my train right now" or "is train X running late" questions. Only meaningful for a train en route on that date — not useful for future planning.
 
 **Input**
 
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number. |
+| `date` | string | Yes | Date to check, `YYYY-MM-DD`. Usually today unless specified otherwise. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 7,
-    "method": "tools/call",
-    "params": {
-        "name": "search_train_by_number",
-        "arguments": {
-            "trainNumber": "12301"
-        }
-    }
+  "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+  "params": { "name": "get_live_status", "arguments": {
+    "trainNumber": "12951", "date": "2025-07-23"
+  }}
 }
 ```
 
-**Response fields**: `trainNumber`, `trainName`, `type`, `runsDays`, `classes[]`, `origin`, `destination`, `departure`, `arrival`, `totalStops`
-
 ---
 
-### 8. `get_live_status`
+### 7. `get_platform`
 
-Get live running status of a train.
-
-**Category**: Public
+Get the platform number a train arrives/departs from at a specific station. Use for "which platform does train X leave from at station Y". Distinct from `get_boarding_points` — this returns a platform number, not a list of alternate boarding stations.
 
 **Input**
 
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
-| `date`        | string | Yes      | `YYYY-MM-DD` |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number. |
+| `stationCode` | string | Yes | Station code to check the platform at. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 8,
-    "method": "tools/call",
-    "params": {
-        "name": "get_live_status",
-        "arguments": {
-            "trainNumber": "12301",
-            "date": "2025-08-15"
-        }
-    }
+  "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+  "params": { "name": "get_platform", "arguments": {
+    "trainNumber": "12951", "stationCode": "NDLS"
+  }}
 }
 ```
 
-**Response fields**: `trainNumber`, `date`, `currentStatus`, `delayMins`, `lastCrossedStation` (`code`, `name`, `at`), `nextStation` (`code`, `name`, `expectedArrival`)
-
 ---
 
-### 9. `get_train_schedule`
+### 8. `get_train_details`
 
-Get full timetable/schedule of a train.
+Get info, route, and/or schedule for one train in a single call. Select sections via `include` — only request what you need.
 
-**Category**: Public
+| Section | Returns | When to use |
+|---------|---------|-------------|
+| `info` (default) | Name, type, classes, origin/destination, stop count | "Tell me about train X" |
+| `route` | All stops with arrival/departure/distance | "What stations does it pass through" |
+| `schedule` | All stops with halt duration | "Give me the full timetable" |
 
 **Input**
 
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Train number, e.g. `12951`. |
+| `include` | string[] | No | Any of `"info"` `"route"` `"schedule"`. Default: `["info"]`. |
 
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 9,
-    "method": "tools/call",
-    "params": {
-        "name": "get_train_schedule",
-        "arguments": {
-            "trainNumber": "12621"
-        }
-    }
-}
-```
-
-**Response fields**: `trainNumber`, `trainName`, `runsDays`, `schedule[]` — each stop has `stopNumber`, `stationCode`, `stationName`, `arrival`, `departure`, `day`, `haltMins`, `distance`
-
----
-
-### 10. `get_platform`
-
-Get platform number for a train at a station.
-
-**Category**: Public
-
-**Input**
-
-| Field         | Type   | Required | Description  |
-| ------------- | ------ | -------- | ------------ |
-| `trainNumber` | string | Yes      | Train number |
-| `stationCode` | string | Yes      | Station code |
-
-**Example**
+**Example — info only**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 10,
-    "method": "tools/call",
-    "params": {
-        "name": "get_platform",
-        "arguments": {
-            "trainNumber": "12301",
-            "stationCode": "NDLS"
-        }
-    }
+  "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+  "params": { "name": "get_train_details", "arguments": {
+    "trainNumber": "12301", "include": ["info"]
+  }}
 }
 ```
 
-**Response fields**: `trainNumber`, `stationCode`, `stationName`, `platform`, `scheduledArrival`, `scheduledDeparture`
-
----
-
-### 11. `search_stations`
-
-Search stations by name, code or city.
-
-**Category**: Public
-
-**Input**
-
-| Field   | Type   | Required | Description                                          |
-| ------- | ------ | -------- | ---------------------------------------------------- |
-| `query` | string | Yes      | Station name, code or city — partial match supported |
-
-**Example**
+**Example — everything**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 11,
-    "method": "tools/call",
-    "params": {
-        "name": "search_stations",
-        "arguments": {
-            "query": "Mumbai"
-        }
-    }
+  "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+  "params": { "name": "get_train_details", "arguments": {
+    "trainNumber": "12301", "include": ["info", "route", "schedule"]
+  }}
 }
 ```
 
-**Response fields**: `stations[]` — each has `code`, `name`, `city`, `state`
+**Response**: object with keys matching the requested `include` values.
 
 ---
 
-### 12. `find_station_code`
+### 9. `get_reference_data`
 
-Find station code from station name or city.
-
-**Category**: Public
-
-**Input**
-
-| Field   | Type   | Required | Description          |
-| ------- | ------ | -------- | -------------------- |
-| `query` | string | Yes      | Station name or city |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 12,
-    "method": "tools/call",
-    "params": {
-        "name": "find_station_code",
-        "arguments": {
-            "query": "New Delhi"
-        }
-    }
-}
-```
-
-**Response fields**: `code`, `fullName`
-
----
-
-### 13. `get_nearby_stations`
-
-Get railway stations near a geographic location (within 50km).
-
-**Category**: Public
-
-**Input**
-
-| Field | Type   | Required | Description |
-| ----- | ------ | -------- | ----------- |
-| `lat` | number | Yes      | Latitude    |
-| `lng` | number | Yes      | Longitude   |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 13,
-    "method": "tools/call",
-    "params": {
-        "name": "get_nearby_stations",
-        "arguments": {
-            "lat": 28.6139,
-            "lng": 77.209
-        }
-    }
-}
-```
-
-**Response fields**: `lat`, `lng`, `stations[]` — each has `code`, `name`, `city`, `state`, `distKm`
-
----
-
-### 14. `list_classes`
-
-List all available travel classes.
-
-**Category**: Public
+Get the full list of valid travel class codes and quota codes with human-readable names, in one call. Call this whenever you're unsure which code maps to what the user said (e.g. "AC first class" → `1A`) before passing `travelClass` or `quota` into any other tool.
 
 **Input**: None
 
@@ -547,259 +387,198 @@ List all available travel classes.
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 14,
-    "method": "tools/call",
-    "params": {
-        "name": "list_classes",
-        "arguments": {}
-    }
+  "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+  "params": { "name": "get_reference_data", "arguments": {} }
 }
 ```
 
-**Response fields**: array of `{ code, name }`
+**Response fields**: `classes[]` — array of `{ code, name }`, `quotas[]` — array of `{ code, name }`
 
 ---
 
-### 15. `list_quotas`
+### 10. `find_station`
 
-List all available booking quotas.
+Resolve a station name, city, or partial text into IRCTC station code(s) — or find stations near a coordinate. **Do not call this if you already have a valid station code** (2–5 uppercase letters like `NDLS`) — pass it directly into other tools.
 
-**Category**: Public
+Three modes — pick exactly one:
 
-**Input**: None
+| Mode | Params | Returns | When to use |
+|------|--------|---------|-------------|
+| Text search | `query` only | Up to 10 matches | Ambiguous name, need to show user options |
+| Exact lookup | `query` + `exactMatch=true` | Single `{ code, fullName }` | Just need a code to feed into another tool |
+| Nearby | `lat` + `lng` | Stations within 50 km | "Stations near me" / location-based |
+
+**Input**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | No | Station name, city, or partial code. Omit if using `lat`/`lng`. |
+| `lat` | number | No | Latitude. Must be paired with `lng`. |
+| `lng` | number | No | Longitude. Must be paired with `lat`. |
+| `exactMatch` | boolean | No | `true` = single best match. `false` (default) = up to 10 matches. Ignored if using `lat`/`lng`. |
+
+**Examples**
+
+```json
+// Text search
+{ "params": { "name": "find_station", "arguments": { "query": "Mumbai" } } }
+
+// Exact code lookup
+{ "params": { "name": "find_station", "arguments": { "query": "New Delhi", "exactMatch": true } } }
+
+// Nearby stations
+{ "params": { "name": "find_station", "arguments": { "lat": 28.6139, "lng": 77.2090 } } }
+```
+
+---
+
+### 11. `recommend_trains`
+
+Get a ranked shortlist (top 5) of trains between two stations, each enriched with availability AND fare in one call. The most efficient tool for "what's my best / cheapest / fastest option" requests — avoids calling `search_trains` + `check_availability` + `get_fare` separately per train.
+
+**Input**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fromStation` | string | Yes | Origin station code. |
+| `toStation` | string | Yes | Destination station code. |
+| `journeyDate` | string | Yes | `YYYY-MM-DD`. |
+| `preference` | string | Yes | `fastest` = shortest duration · `cheapest` = lowest fare · `overnight` = departs after 6 pm |
+| `travelClass` | string | No | Class to price/check against. Default: `SL`. |
+| `quota` | string | No | Quota. Default: `GN`. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 15,
-    "method": "tools/call",
-    "params": {
-        "name": "list_quotas",
-        "arguments": {}
-    }
+  "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+  "params": { "name": "recommend_trains", "arguments": {
+    "fromStation": "NDLS", "toStation": "BCT", "journeyDate": "2025-08-15",
+    "preference": "fastest", "travelClass": "3A", "quota": "GN"
+  }}
 }
 ```
 
-**Response fields**: array of `{ code, name }`
+**Response fields**: `trains[]` — top 5, each with full train info + `availability` + `fare`
 
 ---
 
-### 16. `recommend_trains`
+## User Tools
 
-Get train recommendations ranked by preference.
-
-**Category**: Public
-
-**Input**
-
-| Field         | Type   | Required | Description                          |
-| ------------- | ------ | -------- | ------------------------------------ |
-| `fromStation` | string | Yes      | Origin station code                  |
-| `toStation`   | string | Yes      | Destination station code             |
-| `journeyDate` | string | Yes      | `YYYY-MM-DD`                         |
-| `preference`  | string | Yes      | `fastest` / `cheapest` / `overnight` |
-| `travelClass` | string | No       | Class code. Default: `SL`            |
-| `quota`       | string | No       | Quota code. Default: `GN`            |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 16,
-    "method": "tools/call",
-    "params": {
-        "name": "recommend_trains",
-        "arguments": {
-            "fromStation": "NDLS",
-            "toStation": "BCT",
-            "journeyDate": "2025-08-15",
-            "preference": "fastest",
-            "travelClass": "3A",
-            "quota": "GN"
-        }
-    }
-}
-```
-
-**Response fields**: `trains[]` — top 5 trains each with full train info + `availability` + `fare`
+All user tools require the `x-user-email` header.
 
 ---
 
-### 17. `book_ticket`
+### 12. `book_ticket`
 
-Book a train ticket for the authenticated user.
-
-**Category**: User (requires `x-user-email` header)
+Book one train ticket for one or more passengers on the same journey. Always call `check_availability` and `get_fare` first — this tool does not re-verify either. Returns the PNR on success. For multiple separate trips, call once per trip.
 
 **Input**
 
-| Field         | Type   | Required | Description                                 |
-| ------------- | ------ | -------- | ------------------------------------------- |
-| `trainNumber` | string | Yes      | Train number                                |
-| `trainName`   | string | Yes      | Train name                                  |
-| `source`      | string | Yes      | Boarding station code                       |
-| `destination` | string | Yes      | Destination station code                    |
-| `journeyDate` | string | Yes      | `YYYY-MM-DD`                                |
-| `travelClass` | string | Yes      | Class code                                  |
-| `quota`       | string | Yes      | Quota code                                  |
-| `fare`        | number | Yes      | Total fare amount                           |
-| `passengers`  | array  | Yes      | Min 1 passenger. See passenger object below |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `trainNumber` | string | Yes | Exact train number. |
+| `trainName` | string | Yes | Train name. |
+| `source` | string | Yes | Boarding station code. |
+| `destination` | string | Yes | Destination station code. |
+| `journeyDate` | string | Yes | `YYYY-MM-DD`. |
+| `travelClass` | string | Yes | Class code. |
+| `quota` | string | Yes | Quota code. |
+| `fare` | number | Yes | Total fare for all passengers combined (from `get_fare`). |
+| `passengers` | array | Yes | Min 1. See passenger object below. |
 
 **Passenger object**
 
-| Field             | Type    | Required | Description                       |
-| ----------------- | ------- | -------- | --------------------------------- |
-| `name`            | string  | Yes      | Passenger full name               |
-| `age`             | integer | Yes      | Age in years                      |
-| `gender`          | string  | Yes      | `MALE` / `FEMALE` / `OTHER`       |
-| `berthPreference` | string  | No       | e.g. `LB`, `MB`, `UB`, `SL`, `SU` |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Full name. |
+| `age` | integer | Yes | Age in years. |
+| `gender` | string | Yes | `MALE` / `FEMALE` / `OTHER` |
+| `berthPreference` | string | No | `LB` `MB` `UB` `SL` `SU`/`SUB` `WS`. Omit if no preference. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 17,
-    "method": "tools/call",
-    "params": {
-        "name": "book_ticket",
-        "arguments": {
-            "trainNumber": "12951",
-            "trainName": "Mumbai Rajdhani Express",
-            "source": "NDLS",
-            "destination": "BCT",
-            "journeyDate": "2025-08-15",
-            "travelClass": "3A",
-            "quota": "GN",
-            "fare": 1450,
-            "passengers": [
-                {
-                    "name": "Rahul Sharma",
-                    "age": 28,
-                    "gender": "MALE",
-                    "berthPreference": "LB"
-                },
-                {
-                    "name": "Priya Sharma",
-                    "age": 25,
-                    "gender": "FEMALE",
-                    "berthPreference": "MB"
-                }
-            ]
-        }
-    }
+  "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+  "params": { "name": "book_ticket", "arguments": {
+    "trainNumber": "12951", "trainName": "Mumbai Rajdhani Express",
+    "source": "NDLS", "destination": "BCT", "journeyDate": "2025-08-15",
+    "travelClass": "3A", "quota": "GN", "fare": 1450,
+    "passengers": [
+      { "name": "Rahul Sharma", "age": 28, "gender": "MALE", "berthPreference": "LB" },
+      { "name": "Priya Sharma", "age": 25, "gender": "FEMALE", "berthPreference": "MB" }
+    ]
+  }}
 }
 ```
 
-**Response fields**: full booking object with `id`, `pnr`, `status`, `trainNumber`, `trainName`, `source`, `destination`, `journeyDate`, `travelClass`, `quota`, `fare`, `passengerCount`, `passengers[]`
+**Response fields**: `pnr`, `status`, `bookedAt`, `trainNumber`, `trainName`, `source`, `destination`, `journeyDate`, `travelClass`, `quota`, `fare`, `passengerCount`, `passengers[]`
 
 ---
 
-### 18. `cancel_ticket`
+### 13. `cancel_ticket`
 
-Cancel a booked ticket by PNR.
-
-**Category**: User (requires `x-user-email` header)
+Cancel an existing booking by PNR. **Irreversible.** If there's any ambiguity about which booking the user means, call `track_booking` or `get_booking_history` first to confirm the correct PNR.
 
 **Input**
 
-| Field | Type   | Required | Description                         |
-| ----- | ------ | -------- | ----------------------------------- |
-| `pnr` | string | Yes      | PNR number of the booking to cancel |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pnr` | string | Yes | 10-digit PNR to cancel. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 18,
-    "method": "tools/call",
-    "params": {
-        "name": "cancel_ticket",
-        "arguments": {
-            "pnr": "4521367890"
-        }
-    }
+  "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+  "params": { "name": "cancel_ticket", "arguments": { "pnr": "4521367890" } }
 }
 ```
 
-**Response fields**: update count confirming cancellation
-
 ---
 
-### 19. `get_pnr`
+### 14. `track_booking`
 
-Track and save PNR status for the authenticated user.
+Look up a booking by PNR. Two modes:
 
-**Category**: User (requires `x-user-email` header)
+- `save=false` — quick one-off lookup, returns the raw booking object with no side effects.
+- `save=true` (default) — additionally upserts a tracking record for ongoing status monitoring, returns that tracking record.
 
 **Input**
 
-| Field | Type   | Required | Description         |
-| ----- | ------ | -------- | ------------------- |
-| `pnr` | string | Yes      | PNR number to track |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pnr` | string | Yes | 10-digit PNR. |
+| `save` | boolean | No | `true` (default) = save tracking + return tracking record. `false` = raw booking only. |
 
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 19,
-    "method": "tools/call",
-    "params": {
-        "name": "get_pnr",
-        "arguments": {
-            "pnr": "4521367890"
-        }
-    }
-}
-```
-
-**Response fields**: `id`, `userId`, `pnr`, `lastStatus`, `checkedAt`
-
----
-
-### 20. `get_booking`
-
-Get full booking details by PNR.
-
-**Category**: User (requires `x-user-email` header)
-
-**Input**
-
-| Field | Type   | Required | Description |
-| ----- | ------ | -------- | ----------- |
-| `pnr` | string | Yes      | PNR number  |
-
-**Example**
+**Example — default (with tracking)**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 20,
-    "method": "tools/call",
-    "params": {
-        "name": "get_booking",
-        "arguments": {
-            "pnr": "4521367890"
-        }
-    }
+  "jsonrpc": "2.0", "id": 14, "method": "tools/call",
+  "params": { "name": "track_booking", "arguments": { "pnr": "4521367890" } }
 }
 ```
 
-**Response fields**: full booking object including `passengers[]`
+**Example — raw lookup only**
+
+```json
+{
+  "jsonrpc": "2.0", "id": 14, "method": "tools/call",
+  "params": { "name": "track_booking", "arguments": { "pnr": "4521367890", "save": false } }
+}
+```
+
+**Response**:
+- `save=true`: `id`, `userId`, `pnr`, `lastStatus` (full booking + passenger status), `checkedAt`
+- `save=false`: full booking object with `passengers[]`
 
 ---
 
-### 21. `get_booking_history`
+### 15. `get_booking_history`
 
-Get all bookings for the authenticated user.
-
-**Category**: User (requires `x-user-email` header)
+Get all bookings ever made by the current user. Use for "show me all my bookings" style questions. No filtering — if you need a single booking, use `track_booking` with a specific PNR instead.
 
 **Input**: None
 
@@ -807,260 +586,127 @@ Get all bookings for the authenticated user.
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 21,
-    "method": "tools/call",
-    "params": {
-        "name": "get_booking_history",
-        "arguments": {}
-    }
+  "jsonrpc": "2.0", "id": 15, "method": "tools/call",
+  "params": { "name": "get_booking_history", "arguments": {} }
 }
 ```
 
-**Response fields**: array of all booking objects with `passengers[]`
+**Response**: array of booking objects with `passengers[]`
 
 ---
 
-### 22. `update_booking_status`
+### 16. `update_booking`
 
-Update the status of a booking.
-
-**Category**: User (requires `x-user-email` header)
+Update an existing booking's status and/or boarding point in one atomic call. At least one of `status` or `newBoardingStation` must be provided. Both can be updated in a single call. Common uses: set `status=BOOKED` + `transactionId` after payment; change boarding point (verify the new station via `get_boarding_points` first).
 
 **Input**
 
-| Field           | Type   | Required | Description                                                  |
-| --------------- | ------ | -------- | ------------------------------------------------------------ |
-| `pnr`           | string | Yes      | PNR number                                                   |
-| `status`        | string | Yes      | `PENDING` / `BOOKED` / `RAC` / `WL` / `CANCELLED` / `FAILED` |
-| `transactionId` | string | No       | Payment transaction ID                                       |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pnr` | string | Yes | 10-digit PNR. |
+| `status` | string | No | `PENDING` `BOOKED` `RAC` `WL` `CANCELLED` `FAILED` |
+| `transactionId` | string | No | Payment transaction ID — pair with `status=BOOKED`. |
+| `newBoardingStation` | string | No | New boarding station code. Verify via `get_boarding_points` first. |
 
-**Example**
+**Example — confirm payment**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 22,
-    "method": "tools/call",
-    "params": {
-        "name": "update_booking_status",
-        "arguments": {
-            "pnr": "4521367890",
-            "status": "BOOKED",
-            "transactionId": "TXN123456789"
-        }
-    }
+  "jsonrpc": "2.0", "id": 16, "method": "tools/call",
+  "params": { "name": "update_booking", "arguments": {
+    "pnr": "4521367890", "status": "BOOKED", "transactionId": "TXN123456789"
+  }}
 }
 ```
 
-**Response fields**: update count
+**Example — change boarding point**
+
+```json
+{
+  "jsonrpc": "2.0", "id": 16, "method": "tools/call",
+  "params": { "name": "update_booking", "arguments": {
+    "pnr": "4521367890", "newBoardingStation": "MTJ"
+  }}
+}
+```
 
 ---
 
-### 23. `update_boarding_point`
+### 17. `manage_reminder`
 
-Change the boarding point for a booking.
+Create, list, update, or delete one reminder at a time using the `action` field. To set reminders for multiple bookings, call once per reminder.
 
-**Category**: User (requires `x-user-email` header)
+| action | Required extra fields | Optional fields |
+|--------|----------------------|-----------------|
+| `create` | `type`, `reminderAt` | `bookingId`, `metadata` |
+| `list` | — | — |
+| `update` | `reminderId` | `reminderAt`, `type`, `metadata` |
+| `delete` | `reminderId` | — |
 
 **Input**
 
-| Field                | Type   | Required | Description               |
-| -------------------- | ------ | -------- | ------------------------- |
-| `pnr`                | string | Yes      | PNR number                |
-| `newBoardingStation` | string | Yes      | New boarding station code |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | string | Yes | `create` `list` `update` `delete` |
+| `type` | string | Req. for create | `JOURNEY` `PNR` `BOOKING` |
+| `reminderAt` | string | Req. for create | Full ISO datetime, e.g. `2025-08-14T18:00:00.000Z`. Optional for update (to reschedule). |
+| `bookingId` | string | No | Booking ID to link (create only). |
+| `metadata` | object | No | Free-form extra data, e.g. `{ "note": "..." }`. |
+| `reminderId` | string | Req. for update/delete | Get from `action="list"` if unknown. |
 
-**Example**
+**Examples**
 
 ```json
-{
-    "jsonrpc": "2.0",
-    "id": 23,
-    "method": "tools/call",
-    "params": {
-        "name": "update_boarding_point",
-        "arguments": {
-            "pnr": "4521367890",
-            "newBoardingStation": "MTJ"
-        }
-    }
-}
+// Create
+{ "params": { "name": "manage_reminder", "arguments": {
+  "action": "create", "type": "JOURNEY", "reminderAt": "2025-08-14T18:00:00.000Z",
+  "bookingId": "booking-uuid", "metadata": { "note": "Reach station 1 hour early" }
+}}}
+
+// List
+{ "params": { "name": "manage_reminder", "arguments": { "action": "list" } } }
+
+// Update
+{ "params": { "name": "manage_reminder", "arguments": {
+  "action": "update", "reminderId": "reminder-uuid", "reminderAt": "2025-08-14T16:00:00.000Z"
+}}}
+
+// Delete
+{ "params": { "name": "manage_reminder", "arguments": {
+  "action": "delete", "reminderId": "reminder-uuid"
+}}}
 ```
 
-**Response fields**: updated booking object
+**Response**:
+- `create`: `id`, `userId`, `type`, `reminderAt`, `bookingId`, `metadata`, `sent`, `createdAt`
+- `list`: array of reminders ordered by `reminderAt` ascending
+- `update`: updated reminder object
+- `delete`: deleted reminder object
 
 ---
 
-### 24. `create_reminder`
+### 18. `add_saved_passenger`
 
-Create a journey, PNR or booking reminder.
-
-**Category**: User (requires `x-user-email` header)
+Save a passenger profile for reuse in future bookings. Use when the user says "remember this person" or "save my details for next time". Does not create a booking — combine with `get_saved_passengers` when building a `book_ticket` call for a returning passenger.
 
 **Input**
 
-| Field        | Type   | Required | Description                                         |
-| ------------ | ------ | -------- | --------------------------------------------------- |
-| `type`       | string | Yes      | `JOURNEY` / `PNR` / `BOOKING`                       |
-| `reminderAt` | string | Yes      | ISO datetime string e.g. `2025-08-14T18:00:00.000Z` |
-| `bookingId`  | string | No       | Booking ID to link reminder to                      |
-| `metadata`   | object | No       | Any extra key-value data                            |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Passenger's full name. |
+| `age` | integer | Yes | Age in years. |
+| `gender` | string | Yes | `MALE` / `FEMALE` / `OTHER` |
+| `berthPreference` | string | No | `LB` `MB` `UB` `SL` `SU`/`SUB` `WS`. |
+| `seniorCitizen` | boolean | No | Qualifies for senior citizen quota/discount. Default `false`. |
 
 **Example**
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 24,
-    "method": "tools/call",
-    "params": {
-        "name": "create_reminder",
-        "arguments": {
-            "type": "JOURNEY",
-            "reminderAt": "2025-08-14T18:00:00.000Z",
-            "bookingId": "booking-uuid-here",
-            "metadata": {
-                "note": "Reach station 1 hour early"
-            }
-        }
-    }
-}
-```
-
-**Response fields**: `id`, `userId`, `type`, `reminderAt`, `bookingId`, `metadata`, `sent`, `createdAt`
-
----
-
-### 25. `get_reminders`
-
-Get all reminders for the authenticated user.
-
-**Category**: User (requires `x-user-email` header)
-
-**Input**: None
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 25,
-    "method": "tools/call",
-    "params": {
-        "name": "get_reminders",
-        "arguments": {}
-    }
-}
-```
-
-**Response fields**: array of reminder objects ordered by `reminderAt` ascending
-
----
-
-### 26. `update_reminder`
-
-Update an existing reminder.
-
-**Category**: User (requires `x-user-email` header)
-
-**Input**
-
-| Field        | Type   | Required | Description                   |
-| ------------ | ------ | -------- | ----------------------------- |
-| `reminderId` | string | Yes      | Reminder ID to update         |
-| `reminderAt` | string | No       | New ISO datetime string       |
-| `type`       | string | No       | `JOURNEY` / `PNR` / `BOOKING` |
-| `metadata`   | object | No       | Updated metadata              |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 26,
-    "method": "tools/call",
-    "params": {
-        "name": "update_reminder",
-        "arguments": {
-            "reminderId": "reminder-uuid-here",
-            "reminderAt": "2025-08-14T16:00:00.000Z",
-            "metadata": {
-                "note": "Updated — reach 2 hours early"
-            }
-        }
-    }
-}
-```
-
-**Response fields**: updated reminder object
-
----
-
-### 27. `delete_reminder`
-
-Delete a reminder.
-
-**Category**: User (requires `x-user-email` header)
-
-**Input**
-
-| Field        | Type   | Required | Description           |
-| ------------ | ------ | -------- | --------------------- |
-| `reminderId` | string | Yes      | Reminder ID to delete |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 27,
-    "method": "tools/call",
-    "params": {
-        "name": "delete_reminder",
-        "arguments": {
-            "reminderId": "reminder-uuid-here"
-        }
-    }
-}
-```
-
-**Response fields**: deleted reminder object
-
----
-
-### 28. `add_saved_passenger`
-
-Save a passenger profile for future bookings.
-
-**Category**: User (requires `x-user-email` header)
-
-**Input**
-
-| Field             | Type    | Required | Description                 |
-| ----------------- | ------- | -------- | --------------------------- |
-| `name`            | string  | Yes      | Passenger full name         |
-| `age`             | integer | Yes      | Age in years                |
-| `gender`          | string  | Yes      | `MALE` / `FEMALE` / `OTHER` |
-| `berthPreference` | string  | No       | Preferred berth type        |
-| `seniorCitizen`   | boolean | No       | Default: `false`            |
-
-**Example**
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 28,
-    "method": "tools/call",
-    "params": {
-        "name": "add_saved_passenger",
-        "arguments": {
-            "name": "Rahul Sharma",
-            "age": 28,
-            "gender": "MALE",
-            "berthPreference": "LB",
-            "seniorCitizen": false
-        }
-    }
+  "jsonrpc": "2.0", "id": 18, "method": "tools/call",
+  "params": { "name": "add_saved_passenger", "arguments": {
+    "name": "Rahul Sharma", "age": 28, "gender": "MALE", "berthPreference": "LB", "seniorCitizen": false
+  }}
 }
 ```
 
@@ -1068,11 +714,9 @@ Save a passenger profile for future bookings.
 
 ---
 
-### 29. `get_saved_passengers`
+### 19. `get_saved_passengers`
 
-Get all saved passenger profiles for the authenticated user.
-
-**Category**: User (requires `x-user-email` header)
+Get all passenger profiles saved by the current user. Use before `book_ticket` when the user refers to a previously-saved passenger by name so you can pull their exact details rather than asking the user to repeat them.
 
 **Input**: None
 
@@ -1080,70 +724,39 @@ Get all saved passenger profiles for the authenticated user.
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 29,
-    "method": "tools/call",
-    "params": {
-        "name": "get_saved_passengers",
-        "arguments": {}
-    }
+  "jsonrpc": "2.0", "id": 19, "method": "tools/call",
+  "params": { "name": "get_saved_passengers", "arguments": {} }
 }
 ```
 
-**Response fields**: array of passenger profile objects
+**Response**: array of passenger profile objects
 
 ---
 
 ## Error Responses
 
-All errors follow this structure:
+Tool errors return an MCP content block with `isError: true` and a JSON body:
 
 ```json
 {
-    "jsonrpc": "2.0",
-    "id": 1,
-    "error": {
-        "code": -32000,
-        "message": "Error message here"
-    }
+  "error": "Booking '9999999999' not found",
+  "code": "NOT_FOUND",
+  "jsonRpcCode": -32001
 }
 ```
 
-| HTTP Status | Meaning                                |
-| ----------- | -------------------------------------- |
-| `401`       | Missing `x-user-email` header          |
-| `403`       | Session does not belong to this user   |
-| `404`       | Session not found / resource not found |
-| `500`       | Internal server error                  |
+| `jsonRpcCode` | Meaning | When |
+|---------------|---------|------|
+| `-32602` | Invalid params | Bad input, fix and retry |
+| `-32001` | Not found | Resource doesn't exist, don't retry |
+| `-32002` | Forbidden | Resource belongs to another user |
+| `-32003` | Upstream error | IRCTC call failed, may retry |
+| `-32603` | Internal error | Unexpected server error |
 
----
+HTTP-level errors (before MCP dispatch):
 
-## Session Flow
-
-```
-1. Client sends POST /mcp (no mcp-session-id)
-   → Server creates session, returns mcp-session-id in response header
-
-2. Client stores mcp-session-id
-
-3. All subsequent requests include mcp-session-id header
-   → Server routes to existing session
-
-4. Client sends DELETE /mcp with mcp-session-id
-   → Server closes and removes session
-```
-
----
-
-## Quick Start — Full Booking Flow
-
-```
-1. find_station_code        → get NDLS, BCT codes
-2. search_trains            → find trains NDLS→BCT on date
-3. check_availability       → confirm seats available
-4. get_fare                 → get fare amount
-5. book_ticket              → create booking, get PNR
-6. update_booking_status    → mark as BOOKED after payment
-7. create_reminder          → set journey reminder
-8. get_booking              → fetch booking details anytime
-```
+| HTTP Status | Meaning |
+|-------------|---------|
+| `401` | Missing `x-user-email` header |
+| `403` | Session does not belong to this user |
+| `404` | Session not found |

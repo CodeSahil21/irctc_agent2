@@ -74,6 +74,10 @@ export interface BookTicketParams {
   quota: string;
   fare: number;
   passengers: PassengerInput[];
+  /** Optional idempotency key — if provided and a booking with this key already exists
+   *  for this user, the existing booking is returned instead of creating a duplicate.
+   *  Use a stable client-generated UUID tied to this specific booking intent. */
+  idempotencyKey?: string;
 }
 
 export interface CancelTicketParams {

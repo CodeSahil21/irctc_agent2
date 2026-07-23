@@ -1,5 +1,5 @@
 import { prisma } from "../prisma";
-import { IrctcError } from "../utils/errors";
+import { IrctcError, ValidationError } from "../utils/errors";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -8,10 +8,27 @@ function parseTime(t: string): number {
     return h * 60 + m;
 }
 
+// For clock time formatting — wraps at 24h (e.g. "09:35")
 function minutesToHHMM(mins: number): string {
     const h = Math.floor(mins / 60) % 24;
     const m = mins % 60;
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+// For duration formatting — never wraps (e.g. "33:55" for 33h 55m journeys)
+function minutesToDuration(mins: number): string {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+// Validate a journeyDate string; throws ValidationError on bad input
+function validateJourneyDate(journeyDate: string): Date {
+    const date = new Date(journeyDate);
+    if (isNaN(date.getTime())) {
+        throw new ValidationError(`Invalid journeyDate: "${journeyDate}". Expected format YYYY-MM-DD.`);
+    }
+    return date;
 }
 
 function fareForClass(base: number, cls: string, quota: string): number {
@@ -69,10 +86,20 @@ export async function fetchTrainsFromIrctc(
     fromStation: string,
     toStation: string,
     journeyDate: string,
+    // quota is threaded through for future use (e.g. filtering by quota availability);
+    // currently used for display/downstream availability checks only.
     quota = "GN",
-): Promise<object> {
+): Promise<object[]> {
     const from = fromStation.toUpperCase();
     const to = toStation.toUpperCase();
+    const date = validateJourneyDate(journeyDate);
+
+    // Day-of-week index: 0=Sun,1=Mon,...,6=Sat → maps to runsDays position S M T W T F S
+    const runsOnDay = (runsDays: string, d: Date): boolean => {
+        // runsDays format: "SMTWTFS" where _ means doesn't run that day
+        const dayIndex = d.getDay(); // 0=Sun … 6=Sat
+        return runsDays[dayIndex] !== "_";
+    };
 
     // Find all trains that have both stations as stops, in order
     const fromStops = await prisma.trainScheduleStop.findMany({
@@ -84,7 +111,7 @@ export async function fetchTrainsFromIrctc(
 
     const toMap = new Map(toStops.map((s) => [s.trainNumber, s]));
 
-    const trains = fromStops
+    const candidateTrains = fromStops
         .filter((f) => {
             const t = toMap.get(f.trainNumber);
             return t && t.stopNumber > f.stopNumber;
@@ -101,30 +128,33 @@ export async function fetchTrainsFromIrctc(
                 departure: f.departureTime,
                 arrival: t.arrivalTime,
                 durationMins,
-                duration: minutesToHHMM(durationMins),
+                // Bug #1 fix: use minutesToDuration (no %24 wrap) for journey duration
+                duration: minutesToDuration(durationMins),
                 fromStation: from,
                 toStation: to,
                 distance: t.distanceFromOrigin - f.distanceFromOrigin,
             };
         });
 
-    if (trains.length === 0)
-        throw new IrctcError(`No trains found between ${from} and ${to}`);
+    if (candidateTrains.length === 0) return [];
 
     // Enrich with train master data
-    const numbers = trains.map((t) => t.trainNumber);
+    const numbers = candidateTrains.map((t) => t.trainNumber);
     const masters = await prisma.train.findMany({
         where: { number: { in: numbers } },
     });
     const masterMap = new Map(masters.map((m) => [m.number, m]));
 
-    return trains.map((t) => ({
+    const enriched = candidateTrains.map((t) => ({
         ...t,
         trainName: masterMap.get(t.trainNumber)?.name ?? t.trainNumber,
         type: masterMap.get(t.trainNumber)?.type ?? "EXP",
         classes: masterMap.get(t.trainNumber)?.classes.split(",") ?? [],
         runsDays: masterMap.get(t.trainNumber)?.runsDays ?? "SMTWTFS",
     }));
+
+    // Bug #3 fix: filter out trains that don't run on the requested day-of-week
+    return enriched.filter((t) => runsOnDay(t.runsDays, date));
 }
 
 export async function fetchAvailabilityFromIrctc(
@@ -146,7 +176,7 @@ export async function fetchAvailabilityFromIrctc(
         };
     }
 
-    const date = new Date(journeyDate);
+    const date = validateJourneyDate(journeyDate);
     const avail = availabilityStatus(trainNumber, travelClass, date);
     return {
         trainNumber,
@@ -259,7 +289,7 @@ export async function fetchSeatMapFromIrctc(
     });
     if (!train) throw new IrctcError(`Train ${trainNumber} not found`);
 
-    const date = new Date(journeyDate);
+    const date = validateJourneyDate(journeyDate);
     const seed = (trainNumber + travelClass + date.toISOString().slice(0, 10))
         .split("")
         .reduce((acc, c) => acc + c.charCodeAt(0), 0);
@@ -373,9 +403,26 @@ export async function fetchLiveStatusFromIrctc(
     if (stops.length === 0)
         throw new IrctcError(`Train ${trainNumber} not found`);
 
-    // Simulate current position: pick a stop based on current time
-    const now = new Date();
-    const currentMins = now.getHours() * 60 + now.getMinutes();
+    // Simulate current position based on the requested date's time-of-day.
+    // If the requested date is today, use actual current time; otherwise use
+    // a deterministic time derived from the date string so the result is
+    // consistent for past/future dates rather than reflecting server wall-clock.
+    const requestedDate = validateJourneyDate(date);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const isToday = date.slice(0, 10) === todayStr;
+
+    let currentMins: number;
+    if (isToday) {
+        const now = new Date();
+        currentMins = now.getHours() * 60 + now.getMinutes();
+    } else {
+        // Deterministic simulated time for non-today dates (noon by default,
+        // offset slightly by a hash so different trains differ)
+        const seed = (trainNumber + date)
+            .split("")
+            .reduce((a, c) => a + c.charCodeAt(0), 0);
+        currentMins = 720 + (seed % 240); // noon ± up to 4h
+    }
 
     let lastCrossed = stops[0];
     let nextStop = stops[1] ?? stops[0];
