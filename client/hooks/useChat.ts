@@ -130,6 +130,19 @@ export function useChat() {
         const onInterrupt = (payload: InterruptPayload) => {
             setIsAgentTyping(false);
             setToolProgress(null);
+            // Add the confirmation prompt as an agent message bubble so the
+            // conversation flow looks natural (user sees what's about to happen
+            // inline, not just in the floating dialog).
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: `interrupt-${payload.id}`,
+                    role: "agent",
+                    status: "sent",
+                    createdAt: Date.now(),
+                    content: payload.prompt,
+                },
+            ]);
             setInterrupt(payload);
         };
 

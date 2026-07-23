@@ -1,0 +1,128 @@
+﻿Starting edge case tests ΓÇö acting as human for all confirmations
+============================================================
+
+=== EC-1: Split-slot booking (one slot per message) ===
+  T1: I can help you with that! Could you please provide me with the following details:
+
+1. **Journey Date
+  PASS [ec1_t1_asks_info]
+  T2: Thank you for providing the journey date. 
+
+Could you please let me know the **travel class** you pr
+  PASS [ec1_t2_progresses]
+  T3: The **Paschim Express** has the following details:
+
+- **Train Number**: 12925
+- **Departure**: 23:40
+  PASS [ec1_t3_asks_class]
+  T4: Great! You've chosen **Sleeper Class (SL)** for your journey.
+
+Now, please provide the **passenger d
+  PASS [ec1_t4_asks_pax]
+  T5: Just to confirm ΓÇö I'll book **12925 Paschim Express** on **2026-08-05** (BCT ΓåÆ NDLS), **SL** class, GN quota, Γé╣808 for A
+  PASS [ec1_t5_confirm]
+  T6: Your ticket has been successfully booked! Here are the details:
+
+- **Train Name**: Paschim Express
+- **Train Number**: 1
+  PASS [ec1_t6_booked]
+
+=== EC-2: Topic switch mid-booking (fare digression) ===
+  T1: The Mumbai Rajdhani Express (Train No. 12951) is available for your journey from Mumbai (BCT) to Del
+  PASS [ec2_t1_starts]
+  T2 (digress): The fare for the 2A class on the Mumbai Rajdhani Express (Train No. 12951) is as follows:
+
+| Class |
+  PASS [ec2_t2_fare]
+  T3 (resume): Please provide the passenger details for the booking in 2A class. I need the following information f
+  PASS [ec2_t3_resumes]
+  T4: Just to confirm ΓÇö I'll book **12951 Mumbai Rajdhani Express** on **2026-08-06** (BCT ΓåÆ NDLS), **2A** class, GN quota, Γé╣2
+  PASS [ec2_t4_confirm]
+  T5 (declined): It seems that the booking was not confirmed and therefore was not processed. Please let me know if y
+  PASS [ec2_t5_declined]
+
+=== EC-3: Booking decline then retry with yes ===
+  T1: Just to confirm ΓÇö I'll book **12925 Paschim Express** on **2026-08-07** (BCT ΓåÆ NDLS), **SL** class, 
+  PASS [ec3_got_confirm]
+  PASS [ec3_declined]
+  After decline: It seems that the booking for the Paschim Express was not confirmed and therefor
+  Retry request: Just to confirm ΓÇö I'll book **12925 Paschim Express** on **2026-08-07** (BCT ΓåÆ NDLS), **SL** class, 
+  PASS [ec3_retry_booked]
+
+=== EC-4: Cancel using PNR from booking history ===
+  T1: Here is your booking history:
+
+| PNR          | Train Number | Train Name        | Source | Destinat
+  PASS [ec4_history]
+  T2: Are you sure you want to cancel booking **5302398101**? This cannot be undone. (yes / no)
+  PASS [ec4_cancel_prompt]
+  PASS [ec4_declined]
+  (declined - no actual cancellation)
+
+=== EC-5: Reminder create then delete in same conversation ===
+  T1: What time would you like the reminder to be set for the departure of train 12925 Paschim Express on 2026-08-05?
+  PASS [ec5_created]
+  Reminder ID: REM001
+  T2: It seems that no reminder has been created yet for train 12925 Paschim Express on 2026-08-05. If you would like to set a
+  PASS [ec5_delete_response]
+
+=== EC-6: Multiple passengers in one booking ===
+  T1: Just to confirm ΓÇö I'll book **12925 Paschim Express** on **2026-08-08** (BCT ΓåÆ NDLS), **SL** class, 
+  PASS [ec6_t1_asks]
+  T2: Just to confirm ΓÇö I'll book **12925 Paschim Express** on **2026-08-08** (BCT ΓåÆ NDLS), **SL** class, GN quota, Γé╣808 for V
+  PASS [ec6_t2_confirm]
+  PASS [ec6_declined]
+
+=== EC-7: Use saved passenger in booking ===
+  Saved pax: The passenger Deepak, aged 40, Male has been successfully added to your list.
+  PASS [ec7_pax_saved]
+  T2: The Paschim Express (Train No. 12925) from BCT to NDLS on 2026-08-09 is currently waitlisted with 20
+  PASS [ec7_t2_search]
+  PASS [ec7_confirm]
+  PASS [ec7_declined]
+
+=== EC-8: PNR lookup / track after booking ===
+  Booking done: Your ticket for the **Paschim Express** has been successfully booked. Here are the details:
+
+| **Det
+  PNR status: The status of your PNR **3782208887** is as follows:
+
+| **Detail**             | **Information**    
+  PASS [ec8_pnr_status]
+
+=== EC-9: Live status query mid-booking (state should survive) ===
+  T1 (booking start): The availability for the Paschim Express (Train No. 12925) on 2026-08-11 in 3A c
+  PASS [ec9_t1_booking_start]
+  T2 (live status): The current status of Train 12925 (Paschim Express) is **ON TIME** with no delays. 
+
+- **Last Crosse
+  PASS [ec9_t2_live_status]
+  T3 (resume): Just to confirm ΓÇö I'll book **12925 Paschim Express** on **2026-08-11** (BCT ΓåÆ NDLS), **3A** class, GN quota, Γé╣0 for Kav
+  PASS [ec9_t3_booking_resumes]
+  PASS [ec9_declined]
+
+=== EC-10: Change boarding point after booking ===
+  PASS [ec10_booked]
+  Booked: Your ticket has been successfully booked for the **Paschim Express** from **BCT*
+  T-board-1: Surat is not a valid boarding point for the **Paschim Express**. The available boarding points for this train are:
+
+- **
+  PASS [ec10_boarding_asked]
+  PASS [ec10_board_declined]
+
+=== EC-11: Wrong PNR then correct PNR ===
+  T1 (wrong PNR): It seems that the booking with PNR 1234567890 was not found. Please double-check the PNR number and 
+  PASS [ec11_wrong_pnr]
+  T2 (second PNR): The booking with PNR 9876543210 was also not found. Please verify the PNR number and try again. If y
+  PASS [ec11_second_pnr]
+
+=== EC-12: Track then cancel in same conversation ===
+  T1 (track): It seems that the booking with PNR 2460029704 cannot be found. Please double-check the PNR number an
+  PASS [ec12_track]
+  T2 (cancel): I cannot proceed with the cancellation without a valid PNR. Please provide the correct PNR number for the booking you wi
+  PASS [ec12_cancel_response]
+
+============================================================
+  PASS: 38
+  FAIL: 0
+============================================================

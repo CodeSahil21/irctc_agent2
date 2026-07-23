@@ -59,6 +59,7 @@ _SLOT_LABELS: Dict[str, str] = {
     "name":          "passenger name",
     "age":           "passenger age",
     "gender":        "passenger gender",
+    "newBoardingStation": "new boarding station code",
 }
 
 
@@ -337,6 +338,17 @@ def _extract_collected_slots(
     if not collected.get("quota"):
         collected["quota"] = "GN"
 
+    # Fill pnr from active booking in state (for cancel/update flows)
+    if not collected.get("pnr"):
+        booking = state.get("booking") or {}
+        if booking.get("pnr"):
+            collected["pnr"] = booking["pnr"]
+        else:
+            # Check booking history for the most recent PNR
+            history = (state.get("persistent_results") or {}).get("get_booking_history") or []
+            if len(history) == 1:
+                collected["pnr"] = history[0].get("pnr", "")
+
     # Fill passengers from saved list if user referred to them
     if not collected.get("passengers"):
         saved = (state.get("persistent_results") or {}).get("get_saved_passengers") or []
@@ -365,6 +377,7 @@ _GENDER_RE  = re.compile(r"\b(male|female|other|m|f)\b", re.IGNORECASE)
 _AGE_RE     = re.compile(r"\b(\d{1,3})\b")
 _CLASS_RE   = re.compile(r"\b(SL|2S|CC|3E|3A|2A|1A|EC)\b", re.IGNORECASE)
 _DATE_RE    = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_STATION_RE = re.compile(r"\b([A-Z]{2,5})\b")   # station codes like BRC, NDLS, KOTA
 
 
 def _gender_normalised(raw: str) -> str:
@@ -482,6 +495,32 @@ def _extract_slots_from_messages(
             if dm:
                 updated["journeyDate"] = dm.group(1)
                 break
+
+    # ── Boarding station (update_booking) ────────────────────────────────────
+    # Words to skip when looking for a station code in a short reply like "BRC"
+    _STATION_SKIP = {"SL", "2S", "CC", "3E", "3A", "2A", "1A", "EC", "GN",
+                     "YES", "NO", "OK", "M", "F"}
+    if "newBoardingStation" in missing:
+        for text in recent_human:
+            text_up = text.strip().upper()
+            # Accept if the entire message is a short station code
+            if re.match(r'^[A-Z]{2,5}$', text_up) and text_up not in _STATION_SKIP:
+                updated["newBoardingStation"] = text_up
+                break
+            # Otherwise look for an isolated code
+            for m in _STATION_RE.finditer(text_up):
+                code = m.group(1)
+                if code not in _STATION_SKIP and len(code) >= 2:
+                    updated["newBoardingStation"] = code
+                    break
+            if updated.get("newBoardingStation"):
+                break
+
+    # ── PNR (cancel / update_booking) ────────────────────────────────────────
+    if "pnr" in missing:
+        pnr_match = re.search(r'\b(\d{10})\b', " ".join(recent_human))
+        if pnr_match:
+            updated["pnr"] = pnr_match.group(1)
 
     return updated
 
@@ -792,6 +831,9 @@ async def agent_node(
                 inferred_intent = "create_reminder"
             elif any(w in reply_lower for w in ("save", "add", "passenger")):
                 inferred_intent = "add_saved_passenger"
+            elif any(w in reply_lower for w in ("boarding point", "boarding station", "newboardingstation",
+                                                  "board from", "board at")):
+                inferred_intent = "update_booking"
 
             if inferred_intent:
                 seed_slots = _extract_collected_slots(inferred_intent, {}, state)
