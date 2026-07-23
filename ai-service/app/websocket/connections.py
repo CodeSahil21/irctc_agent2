@@ -11,6 +11,7 @@ class SocketSession:
     user_name: Optional[str] = None
     pending_user_message: Optional[str] = None
     pending_message_id: Optional[str] = None
+    interrupted: bool = False  # True when graph is paused at human_approval_node
 
 
 # sid → SocketSession

@@ -47,6 +47,28 @@ def _downstream_has_destructive(tool_plan: List[str], after_index: int) -> bool:
     )
 
 
+def _slim_train(t: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Keep only the fields needed for display + downstream tool args.
+    Drops per-station schedule arrays and other large nested blobs.
+    """
+    return {k: v for k, v in t.items() if k not in (
+        "stations", "schedule", "stoppages", "halts", "route",
+        "coaches", "coachComposition", "runningDays",
+    )}
+
+
+def _slim_booking(b: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Keep only fields needed for cross-turn arg resolution.
+    Full booking detail is fetched fresh on demand via get_booking/get_pnr.
+    """
+    return {k: b[k] for k in (
+        "pnr", "trainNumber", "trainName", "source", "destination",
+        "journeyDate", "travelClass", "status", "passengers",
+    ) if k in b}
+
+
 def _apply_result(
     tool_name: str,
     result_data: Any,
@@ -61,8 +83,12 @@ def _apply_result(
             trains = result_data.get("trains", [])
         else:
             trains = []
-        updates["search_results"] = trains
-        if trains:
+        # Slim each train before storing — drops large schedule arrays
+        slim = [_slim_train(t) for t in trains]
+        # Merge with existing search_results when doing a multi-date range search
+        existing_results = updates.get("search_results") or []
+        updates["search_results"] = existing_results + slim
+        if trains and not (updates.get("travel", {}) or {}).get("train_number"):
             travel["train_number"] = trains[0].get("trainNumber", travel.get("train_number"))
             travel["train_name"] = trains[0].get("trainName", travel.get("train_name"))
     elif tool_name == "check_availability":
@@ -75,17 +101,31 @@ def _apply_result(
         if isinstance(result_data, dict) and result_data.get("pnr"):
             travel["pnr"] = result_data["pnr"]
     elif tool_name == "get_booking_history":
+        raw_list = result_data if isinstance(result_data, list) else []
+        # Slim each booking — only keep fields needed for cross-turn resolution
+        slim_list = [_slim_booking(b) for b in raw_list if isinstance(b, dict)]
         existing = dict(updates.get("tool_results") or {})
-        existing["get_booking_history"] = result_data if isinstance(result_data, list) else []
+        existing["get_booking_history"] = slim_list
         updates["tool_results"] = existing
     elif tool_name == "get_reminders":
-        updates["reminders"] = result_data if isinstance(result_data, list) else []
+        result_list = result_data if isinstance(result_data, list) else []
+        updates["reminders"] = result_list
+        # Also persist in tool_results so it carries forward across turns
+        # (needed for update_reminder / delete_reminder in a later turn)
+        existing = dict(updates.get("tool_results") or {})
+        existing["get_reminders"] = result_list
+        updates["tool_results"] = existing
     elif tool_name in ("list_classes", "list_quotas"):
         existing = dict(updates.get("tool_results") or {})
         existing[tool_name] = result_data
         updates["tool_results"] = existing
     elif tool_name == "get_saved_passengers":
-        updates["saved_passengers"] = result_data if isinstance(result_data, list) else []
+        result_list = result_data if isinstance(result_data, list) else []
+        updates["saved_passengers"] = result_list
+        # Also persist in tool_results so it carries forward across turns
+        existing = dict(updates.get("tool_results") or {})
+        existing["get_saved_passengers"] = result_list
+        updates["tool_results"] = existing
     elif tool_name == "find_station_code" and isinstance(result_data, dict):
         code = result_data.get("code")
         if code:

@@ -27,7 +27,8 @@ class MCPDiscovery:
         raw_tools = await self._client.list_tools(user_email=_PROBE_EMAIL)
 
         self._tools = [self._normalize_tool(t) for t in raw_tools]
-        self._by_name = {t["name"]: t for t in self._tools}
+        # Index by the function name inside the OpenAI wrapper
+        self._by_name = {t["function"]["name"]: t for t in self._tools}
 
         app_logger.info(
             "Tool discovery complete | tools={names}",
@@ -41,34 +42,42 @@ class MCPDiscovery:
     @staticmethod
     def _normalize_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Convert MCP tool schema into Anthropic-compatible tool schema.
-        1. Convert inputSchema (camelCase) -> input_schema (snake_case).
-        2. Strip out non-standard Anthropic fields (like 'execution').
+        Convert MCP tool schema into OpenAI function-calling format:
+        {"type": "function", "function": {"name", "description", "parameters"}}
         """
         raw_schema = tool.get("input_schema") or tool.get("inputSchema", {})
 
-        anthropic_tool = {
-            "name": tool["name"],
-            "description": tool.get("description", ""),
-            "input_schema": raw_schema,
+        return {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": raw_schema,
+            },
         }
 
-        if "strict" in tool:
-            anthropic_tool["strict"] = tool["strict"]
-        if "cache_control" in tool:
-            anthropic_tool["cache_control"] = tool["cache_control"]
-
-        return anthropic_tool
-
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Return all cached tool schemas (Anthropic-compatible format)."""
+        """Return all cached tool schemas (OpenAI function-calling format)."""
         return self._tools
 
     def has_tools(self) -> bool:
         return bool(self._by_name)
 
     def get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
-        return self._by_name.get(name)
+        """
+        Return the schema dict for a tool by name.
+        Returns a flattened dict with 'input_schema' key so slot_filler_node
+        can read input_schema.properties / input_schema.required as before.
+        """
+        wrapped = self._by_name.get(name)
+        if wrapped is None:
+            return None
+        fn = wrapped["function"]
+        return {
+            "name": fn["name"],
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters", {}),
+        }
 
     def is_known(self, name: str) -> bool:
         return name in self._by_name

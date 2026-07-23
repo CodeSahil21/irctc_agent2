@@ -2,7 +2,7 @@
 """
 Layer 2 — Conversation Memory
 
-Manages the message history that gets sent to Claude.
+Manages the message history that gets sent to the LLM.
 Applies a sliding window so we never blow the context window with 200 messages.
 
 Strategy:
@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-# Max messages to send to Claude (user + assistant pairs)
+# Max messages to send to LLM (user + assistant pairs)
 _WINDOW_SIZE = 20  # 10 turns = 20 messages
 
 
@@ -37,9 +37,9 @@ def get_windowed_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
     return [first] + recent
 
 
-def format_for_claude(messages: List[BaseMessage]) -> List[Dict[str, Any]]:
+def format_messages(messages: List[BaseMessage]) -> List[Dict[str, Any]]:
     """
-    Convert LangChain BaseMessage list → Anthropic SDK message dicts.
+    Convert LangChain BaseMessage list → OpenAI SDK message dicts.
     Applies sliding window before formatting.
     Skips ToolMessages — those are surfaced via context_builder instead.
     """

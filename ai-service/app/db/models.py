@@ -44,6 +44,6 @@ class ExecutionLogDoc(BaseModel):
     errors: List[str] = Field(default_factory=list)
     turn_start_time: Optional[float] = None
     total_latency_ms: Optional[float] = None
-    claude_calls: Optional[int] = None
+    llm_calls: Optional[int] = None
     tools_called: Optional[int] = None
     created_at: datetime = Field(default_factory=_now)

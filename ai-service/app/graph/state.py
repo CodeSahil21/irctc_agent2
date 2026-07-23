@@ -7,13 +7,16 @@ from langgraph.graph.message import add_messages
 class TravelContext(TypedDict, total=False):
     from_station: Optional[str]
     to_station: Optional[str]
-    date: Optional[str]
+    date: Optional[str]                          # single ISO date YYYY-MM-DD
+    date_range: Optional[List[str]]              # list of ISO dates for flexible/week searches
     travel_class: Optional[str]
     quota: Optional[str]
     train_number: Optional[str]
     train_name: Optional[str]
     pnr: Optional[str]
     selected_passengers: Optional[List[Dict[str, Any]]]  # passengers chosen for booking
+    new_passenger_for_booking: Optional[Dict[str, Any]]  # unsaved passenger being collected
+    save_new_passenger: Optional[bool]           # whether to save the new passenger after booking
 
 
 class UserPreferences(TypedDict, total=False):
@@ -27,7 +30,7 @@ class ExecutionMetrics(TypedDict, total=False):
     turn_start_time: Optional[float]
     tools_called: Optional[int]
     total_latency_ms: Optional[float]
-    claude_calls: Optional[int]
+    llm_calls: Optional[int]
 
 
 class ToolCall(TypedDict, total=False):

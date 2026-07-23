@@ -24,7 +24,7 @@ router = APIRouter()
     "/chat",
     response_model=ChatResponse,
     status_code=status.HTTP_200_OK,
-    summary="Send a message to Claude (Non-streaming)",
+    summary="Send a message to LLM (Non-streaming)",
     description="Validates input, sends conversation history to ChatService, and returns a JSON response.",
 )
 @traceable(name="POST /chat", run_type="chain")
@@ -58,7 +58,7 @@ async def create_chat_completion(
 
 @router.post(
     "/chat/stream",
-    summary="Stream Claude response token-by-token",
+    summary="Stream LLM response token-by-token",
     description="Establishes an SSE stream emitting JSON tokens in real-time.",
 )
 @traceable(name="POST /chat/stream", run_type="chain")

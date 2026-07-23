@@ -7,8 +7,8 @@ from langchain_core.messages import AIMessage
 
 from app.graph.state import TravelState
 from app.memory.context_builder import build_tool_context
-from app.memory.conversation_memory import format_for_claude
-from app.services.claude import ClaudeService
+from app.memory.conversation_memory import format_messages
+from app.services.openai_service import OpenAIService
 from app.telemetry.logging import app_logger
 
 # Indian Railways PNRs are 10 digits. Guard against the model surfacing any PNR
@@ -18,7 +18,6 @@ _PNR_RE = re.compile(r"\b\d{10}\b")
 
 def _grounded_pnrs(state: TravelState) -> Set[str]:
     # Scan every state field that can legitimately contain a PNR.
-    # tool_results["get_booking_history"] is a list of booking objects — must be included.
     blob = json.dumps(
         {
             "booking": state.get("booking"),
@@ -56,10 +55,13 @@ CRITICAL RULES:
 - NEVER tell the user to visit www.irctc.co.in or any external website. All data comes from this system.
 - If tool results are missing or empty, tell the user you could not retrieve the data and ask them to try again.
 - NEVER ask the user for a PNR, booking ID, or passenger ID to fetch their saved passengers, booking history, or reminders — these are fetched automatically using their account. If these results are empty, say "no saved passengers found" etc., not "please provide your PNR".
+- NEVER ask "Would you like to proceed?", "Shall I book?", "Would you like to confirm?", or any booking confirmation question — the booking confirmation is handled automatically by the system. Just present the data clearly.
+- NEVER ask "how many passengers?" — passenger selection is handled separately by the system.
 
 Guidelines:
 - Use Markdown tables for train lists.
 - Show fare breakdowns clearly with ₹ symbol.
+- For availability results, show seat count, class, and fare breakdown. End with a clear summary — do NOT ask for confirmation.
 - For bookings, show PNR, train, route, date, passengers, and fare — all taken directly from tool results.
 - For live status, show delay, last station, and next station.
 - If there were errors, explain them in plain English and suggest recovery.
@@ -68,14 +70,14 @@ Guidelines:
 - Be concise and professional."""
 
 
-async def response_node(state: TravelState, claude_service: ClaudeService) -> Dict[str, Any]:
+async def response_node(state: TravelState, llm_service: OpenAIService) -> Dict[str, Any]:
     # Prefer ranked results over raw search results for display
     ranked = state.get("ranked_results")
     if ranked is not None:
         state = dict(state)
         state["search_results"] = ranked
 
-    messages = format_for_claude(state.get("messages", []))
+    messages = format_messages(state.get("messages", []))
 
     context = build_tool_context(state)
     if context:
@@ -89,19 +91,14 @@ async def response_node(state: TravelState, claude_service: ClaudeService) -> Di
     if feedback and messages:
         messages[-1]["content"] += f"\n\n[Quality note]: {feedback}"
 
-    raw_response = await claude_service.chat_raw(
+    raw_response = await llm_service.chat_raw(
         messages=messages,
         system=_SYSTEM,
         temperature=0.7,
         max_tokens=2048,
-        cache_system=True,
     )
 
-    reply = "".join(
-        block.text for block in raw_response.content
-        if getattr(block, "type", None) == "text"
-    )
-
+    reply = raw_response.choices[0].message.content or ""
     reply = _ground_response(reply, state)
 
     return {"messages": [AIMessage(content=reply)]}

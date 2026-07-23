@@ -4,6 +4,17 @@ from typing import Any, Dict
 from app.graph.state import TravelState
 
 
+def _carry_forward_tool_results(state: TravelState) -> dict:
+    """
+    Keep cross-turn useful tool results (booking history, saved passengers).
+    Drop turn-scoped results (route, live_status, platform, seat_map, etc.)
+    so the planner doesn't reuse stale single-turn data.
+    """
+    _PERSIST_KEYS = {"get_booking_history", "get_saved_passengers", "get_reminders"}
+    prev = state.get("tool_results") or {}
+    return {k: v for k, v in prev.items() if k in _PERSIST_KEYS}
+
+
 def get_working_snapshot(state: TravelState) -> Dict[str, Any]:
     """
     Return a compact dict of the current working state.
@@ -52,6 +63,8 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "check_availability", "get_fare", "book_ticket",
         "get_seat_map", "get_boarding_points", "get_route",
         "get_train_schedule", "get_live_status", "get_platform",
+        "update_boarding_point", "cancel_ticket",
+        "get_pnr", "get_booking",
     }
     # Use the INCOMING intent from the new message (passed in state after intent_node
     # has already updated it) — not the stale previous-turn intent.
@@ -70,7 +83,9 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
         "errors": [],
         "retries": 0,
         "parallel_results": {},
-        "tool_results": {},           # always cleared — turn-scoped
+        # Selectively clear tool_results — keep cross-turn useful data
+        # (booking_history, saved_passengers) but drop turn-scoped data
+        "tool_results": _carry_forward_tool_results(state),
         "reflection_required": None,
         "reflection_passed": None,
         "reflection_feedback": "",
@@ -80,7 +95,7 @@ def reset_turn_state(state: TravelState) -> Dict[str, Any]:
             "turn_start_time": time.time(),
             "tools_called": 0,
             "total_latency_ms": 0.0,
-            "claude_calls": 0,
+            "llm_calls": 0,
         },
         "turn_count": (state.get("turn_count") or 0) + 1,
     }

@@ -17,7 +17,7 @@ def _build_confirmation_prompt(state: TravelState) -> str:
     travel = state.get("travel") or {}
     fare = state.get("fare") or {}
     booking = state.get("booking") or {}
-    passengers = travel.get("selected_passengers") or state.get("saved_passengers") or []
+    passengers = travel.get("selected_passengers") or []
 
     if intent == "book_ticket":
         train = f"{travel.get('train_number', '?')} {travel.get('train_name', '')}".strip()

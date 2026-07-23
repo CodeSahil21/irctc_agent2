@@ -2,7 +2,7 @@
 """
 Phase 12 — Reflection
 
-Claude inspects the tool results against the user goal and decides:
+LLM inspects the tool results against the user goal and decides:
   - satisfied  → continue to response_node
   - unsatisfied → set reflection_feedback, route back to tool_planner_node for a retry
 
@@ -13,26 +13,29 @@ import json
 from typing import Any, Dict
 
 from app.graph.state import TravelState
-from app.services.claude import ClaudeService
+from app.services.openai_service import OpenAIService
 from app.telemetry.logging import app_logger
 
 _REFLECT_TOOL = {
-    "name": "reflect_on_results",
-    "description": "Evaluate whether the tool results satisfy the user's goal.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "satisfied": {
-                "type": "boolean",
-                "description": "True if the results fully answer the user's goal.",
+    "type": "function",
+    "function": {
+        "name": "reflect_on_results",
+        "description": "Evaluate whether the tool results satisfy the user's goal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "satisfied": {
+                    "type": "boolean",
+                    "description": "True if the results fully answer the user's goal.",
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "If not satisfied, explain what is missing or wrong and what should be retried.",
+                },
             },
-            "feedback": {
-                "type": "string",
-                "description": "If not satisfied, explain what is missing or wrong and what should be retried.",
-            },
-        },
-        "required": ["satisfied"],
-    },
+            "required": ["satisfied"],
+        }
+    }
 }
 
 _SYSTEM = (
@@ -43,13 +46,12 @@ _SYSTEM = (
 )
 
 
-async def reflection_node(state: TravelState, claude_service: ClaudeService) -> Dict[str, Any]:
+async def reflection_node(state: TravelState, llm_service: OpenAIService) -> Dict[str, Any]:
     user_goal = state.get("user_goal") or ""
     tool_history = state.get("tool_history") or []
     errors = state.get("errors") or []
 
     # Deterministic pre-gate: if any tool failed or errored, the goal is not met.
-    # We never let Claude rubber-stamp "satisfied" over a failed/empty tool run.
     has_failures = bool(errors) or any(
         entry.get("status") in ("failed", "error") for entry in tool_history
     )
@@ -79,21 +81,18 @@ async def reflection_node(state: TravelState, claude_service: ClaudeService) -> 
     )
 
     try:
-        response = await claude_service.chat_raw(
+        response = await llm_service.chat_raw(
             messages=[{"role": "user", "content": prompt}],
             system=_SYSTEM,
             tools=[_REFLECT_TOOL],
-            tool_choice={"type": "tool", "name": "reflect_on_results"},
+            tool_choice={"type": "function", "function": {"name": "reflect_on_results"}},
             temperature=0.0,
             max_tokens=512,
-            cache_system=True,
         )
 
         tool_input: Dict[str, Any] = {}
-        for block in response.content:
-            if getattr(block, "type", None) == "tool_use":
-                tool_input = block.input or {}
-                break
+        if response.choices[0].message.tool_calls:
+            tool_input = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
 
         satisfied = bool(tool_input.get("satisfied", True))
         feedback = tool_input.get("feedback", "")
@@ -106,7 +105,6 @@ async def reflection_node(state: TravelState, claude_service: ClaudeService) -> 
         return {
             "reflection_passed": satisfied,
             "reflection_feedback": feedback,
-            # Clear reflection_required so we don't loop more than once
             "reflection_required": False,
         }
 

@@ -24,11 +24,11 @@ from app.graph.nodes import (
 )
 from app.graph.state import TravelState
 from app.mcp.registry import MCPToolRegistry
-from app.services.claude import ClaudeService
+from app.services.openai_service import OpenAIService
 
 
 def create_agent_graph(
-    claude_service: ClaudeService,
+    llm_service: OpenAIService,
     mcp_registry: MCPToolRegistry = None,
     checkpointer: MemorySaver = None,
 ):
@@ -43,7 +43,7 @@ def create_agent_graph(
           → human_approval_node  (destructive actions only)
           → tool_executor_node   (loops; runs parallel groups automatically)
           → ranking_node         (search intents only — pure Python sort)
-          → reflection_node      (data-heavy intents — Claude quality check)
+          → reflection_node      (data-heavy intents — LLM quality check)
           → response_node
           → END
 
@@ -52,14 +52,14 @@ def create_agent_graph(
     builder = StateGraph(TravelState)
 
     # ── Nodes ─────────────────────────────────────────────────────────
-    builder.add_node("intent_node", partial(intent_node, claude_service=claude_service))
+    builder.add_node("intent_node", partial(intent_node, llm_service=llm_service))
     builder.add_node("slot_filler_node", partial(slot_filler_node, mcp_registry=mcp_registry))
-    builder.add_node("tool_planner_node", partial(tool_planner_node, claude_service=claude_service, mcp_registry=mcp_registry))
+    builder.add_node("tool_planner_node", partial(tool_planner_node, llm_service=llm_service, mcp_registry=mcp_registry))
     builder.add_node("human_approval_node", human_approval_node)
     builder.add_node("tool_executor_node", partial(tool_executor_node, mcp_registry=mcp_registry))
     builder.add_node("ranking_node", ranking_node)
-    builder.add_node("reflection_node", partial(reflection_node, claude_service=claude_service))
-    builder.add_node("response_node", partial(response_node, claude_service=claude_service))
+    builder.add_node("reflection_node", partial(reflection_node, llm_service=llm_service))
+    builder.add_node("response_node", partial(response_node, llm_service=llm_service))
 
     # ── Edges ─────────────────────────────────────────────────────────
     builder.add_edge(START, "intent_node")

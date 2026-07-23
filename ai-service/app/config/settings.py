@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     app_name: str = Field("ai-service", alias="APP_NAME")
     app_env: str = Field("development", alias="APP_ENV")
     debug: bool = Field(False, alias="DEBUG")
-    anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
-    anthropic_default_model: str = Field("claude-haiku-4-5", alias="ANTHROPIC_DEFAULT_MODEL")
+    openai_api_key: str = Field(..., alias="OPENAI_API_KEY")
+    openai_default_model: str = Field("gpt-4o-mini", alias="OPENAI_DEFAULT_MODEL")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     langsmith_tracing: bool = Field(True, alias="LANGSMITH_TRACING")
     langsmith_endpoint: str = Field("https://api.smith.langchain.com", alias="LANGSMITH_ENDPOINT")
@@ -29,11 +29,11 @@ class Settings(BaseSettings):
     mongo_url: str = Field("mongodb://localhost:27017", alias="MONGO_URL")
     mongo_db: str = Field("irctc_ai", alias="MONGO_DB")
 
-    @field_validator("anthropic_api_key")
+    @field_validator("openai_api_key")
     @classmethod
     def validate_key(cls, v: str) -> str:
-        if not v or not v.startswith("sk-ant"):
-            raise ValueError("ANTHROPIC_API_KEY must be set and start with 'sk-ant'")
+        if not v or not v.startswith("sk-"):
+            raise ValueError("OPENAI_API_KEY must be set and start with 'sk-'")
         return v
 
     @field_validator("jwt_secret")

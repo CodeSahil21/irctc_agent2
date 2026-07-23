@@ -2,7 +2,7 @@
 """
 Deterministic tool-argument resolution.
 
-Tool plans (and their arguments) are produced by Claude at *plan time*, before
+Tool plans (and their arguments) are produced by the LLM at *plan time*, before
 any tool has run. For deterministic chains — e.g. search_trains → check_availability
 → get_fare → book_ticket — the arguments of later tools depend on the *results* of
 earlier ones (the train number comes from the search result, the fare from get_fare,
@@ -30,6 +30,35 @@ def _top_train(state: Dict[str, Any]) -> Dict[str, Any]:
     return results[0] if results else {}
 
 
+def _from_booking_history(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract trainNumber, source, journeyDate from booking history or booking in state.
+    Used to auto-fill args for tools like get_boarding_points, get_live_status, etc.
+    when the user refers to a previously fetched booking.
+    """
+    # Check tool_results["get_booking_history"]
+    tool_results = state.get("tool_results") or {}
+    history = tool_results.get("get_booking_history") or []
+    if isinstance(history, list) and history:
+        b = history[0]
+        return {
+            "trainNumber": str(b.get("trainNumber", "")) or None,
+            "source": b.get("source"),
+            "journeyDate": (b.get("journeyDate") or "")[:10] or None,
+            "pnr": b.get("pnr"),
+        }
+    # Fallback to state.booking
+    booking = state.get("booking") or {}
+    if isinstance(booking, dict) and booking.get("trainNumber"):
+        return {
+            "trainNumber": str(booking.get("trainNumber", "")) or None,
+            "source": booking.get("source"),
+            "journeyDate": (booking.get("journeyDate") or "")[:10] or None,
+            "pnr": booking.get("pnr"),
+        }
+    return {}
+
+
 def patch_tool_args(
     tool_name: str,
     tool_args: Dict[str, Any],
@@ -44,7 +73,11 @@ def patch_tool_args(
         if not _is_empty(value) and _is_empty(args.get(key)):
             args[key] = value
 
-    train_number = travel.get("train_number") or top.get("trainNumber")
+    train_number = (
+        travel.get("train_number")
+        or top.get("trainNumber")
+        or _from_booking_history(state).get("trainNumber")
+    )
 
     if tool_name in ("search_trains", "recommend_trains"):
         fill("fromStation", travel.get("from_station"))
@@ -68,8 +101,9 @@ def patch_tool_args(
         fill("toStation", travel.get("to_station"))
 
     elif tool_name == "get_live_status":
-        fill("trainNumber", train_number)
-        fill("date", travel.get("date"))
+        bh = _from_booking_history(state)
+        fill("trainNumber", train_number or bh.get("trainNumber"))
+        fill("date", travel.get("date") or bh.get("journeyDate"))
 
     elif tool_name == "get_seat_map":
         fill("trainNumber", train_number)
@@ -77,9 +111,10 @@ def patch_tool_args(
         fill("journeyDate", travel.get("date"))
 
     elif tool_name == "get_boarding_points":
-        fill("trainNumber", train_number)
-        fill("fromStation", travel.get("from_station"))
-        fill("journeyDate", travel.get("date"))
+        bh = _from_booking_history(state)
+        fill("trainNumber", train_number or bh.get("trainNumber"))
+        fill("fromStation", travel.get("from_station") or bh.get("source"))
+        fill("journeyDate", travel.get("date") or bh.get("journeyDate"))
 
     elif tool_name in ("get_route", "get_train_schedule", "search_train_by_number"):
         fill("trainNumber", train_number)
@@ -108,11 +143,12 @@ def patch_tool_args(
             args.pop("passengers", None)
 
     elif tool_name in ("cancel_ticket", "get_pnr", "get_booking"):
-        fill("pnr", travel.get("pnr"))
+        bh = _from_booking_history(state)
+        fill("pnr", travel.get("pnr") or bh.get("pnr"))
 
     elif tool_name == "update_boarding_point":
-        fill("pnr", travel.get("pnr"))
-        # newBoardingStation — planner sets this; we also try travel context as fallback
+        bh = _from_booking_history(state)
+        fill("pnr", travel.get("pnr") or bh.get("pnr"))
         fill("newBoardingStation", travel.get("from_station"))
 
     elif tool_name == "update_booking_status":
@@ -142,15 +178,17 @@ def _resolve_passengers(
     """
     Resolve the booking passenger list from live state.
 
-    We NEVER fabricate a placeholder passenger — booking with a made-up traveller
-    is worse than failing. If none can be resolved we return an empty list, which
-    the MCP registry rejects as a missing required field, and the agent asks the
-    user to provide/select passengers.
+    STRICT RULE: Only use explicitly selected passengers.
+    NEVER auto-select all saved_passengers — that decision belongs to the user.
+    If no passengers are selected, return empty list so book_ticket fails
+    validation and the slot filler asks the user to choose.
     """
+    # If planner already set passengers in args, use those
     if isinstance(passengers, list) and passengers:
         return passengers
 
-    selected = travel.get("selected_passengers") or state.get("saved_passengers") or []
+    # Only use explicitly selected passengers — never fall back to all saved
+    selected = travel.get("selected_passengers") or []
     resolved: List[Dict[str, Any]] = []
     for p in selected:
         if not isinstance(p, dict) or not p.get("name"):
@@ -163,4 +201,7 @@ def _resolve_passengers(
         if p.get("berthPreference"):
             entry["berthPreference"] = p["berthPreference"]
         resolved.append(entry)
+
+    # Return empty if nothing selected — book_ticket will fail required field
+    # validation and the agent will ask the user to specify passengers
     return resolved

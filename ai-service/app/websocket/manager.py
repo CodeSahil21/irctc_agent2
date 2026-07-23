@@ -142,6 +142,62 @@ def _make_manager(agent_graph, conv_manager):
                 "user_preferences": user_preferences,
             }
 
+            # ── Auto-resume interrupted graph on yes/no message ───────────
+            # If graph is in interrupted state (waiting for booking confirmation)
+            # and user types "yes"/"no" as a text message instead of using
+            # the resume socket event, handle it transparently.
+            _YES = {"yes", "y", "yep", "yeah", "sure", "go ahead", "proceed",
+                    "confirm", "ok", "okay", "book it", "do it", "absolutely"}
+            _NO  = {"no", "n", "nope", "cancel", "stop", "don't", "dont"}
+            content_stripped = content.lower().strip().rstrip("!.").strip()
+            is_yes = content_stripped in _YES or content_stripped.startswith(
+                ("yes ", "go ahead", "proceed", "confirm and", "yes confirm", "yes book")
+            )
+            is_no = content_stripped in _NO
+
+            if (is_yes or is_no) and session.interrupted:
+                approved = is_yes
+                session.interrupted = False
+                app_logger.info(
+                    "Auto-resuming interrupted graph | approved={approved} | sid={sid}",
+                    approved=approved, sid=sid,
+                )
+                try:
+                    result = await agent_graph.ainvoke(
+                        Command(resume=approved),
+                        config=config,
+                    )
+                    reply = ""
+                    for msg in reversed(result.get("messages", [])):
+                        if hasattr(msg, "content") and not isinstance(msg, HumanMessage):
+                            reply = str(msg.content)
+                            break
+                    reply_id = nanoid.generate()
+                    await _stream_chunks(sid, reply_id, reply)
+                    from app.types.chat import build_complete_message
+                    complete_msg = build_complete_message(msg_id=reply_id, content=reply, result=result)
+                    await sio.emit(events.MESSAGE_COMPLETE, {"message": complete_msg}, to=sid)
+                    if session.user_email:
+                        await conv_manager.save_turn(
+                            conversation_id=conversation_id,
+                            user_email=session.user_email,
+                            user_message=content,
+                            assistant_reply=reply,
+                            intent=result.get("intent"),
+                            result=result,
+                            user_name=session.user_name,
+                        )
+                        await conv_manager.close(session.user_email, prefs=result.get("user_preferences"))
+                    session.pending_user_message = None
+                    session.pending_message_id = None
+                    return
+                except Exception as e:
+                    app_logger.error("Auto-resume error: {e}", e=str(e), exc_info=True)
+                    # Fall through to normal flow if resume fails
+                finally:
+                    await sio.emit(events.AGENT_TYPING, {"isTyping": False}, to=sid)
+                return
+
             # Stream graph execution with event callbacks
             result = await _run_graph(
                 sid=sid,
@@ -213,6 +269,7 @@ def _make_manager(agent_graph, conv_manager):
         conversation_id = session.conversation_id or f"conv-{sid[:8]}"
         config = {"configurable": {"thread_id": conversation_id}}
         msg_id = data.get("id") or nanoid.generate()
+        session.interrupted = False  # clear interrupt state
 
         await sio.emit(events.AGENT_TYPING, {"isTyping": True}, to=sid)
 
@@ -324,6 +381,9 @@ async def _run_graph(
         for t in tool_history
     )
     if result.get("confirmation_required") and not result.get("confirmed") and not destructive_ran:
+        session = get_session(sid)
+        if session:
+            session.interrupted = True
         await sio.emit(events.INTERRUPT, {
             "id": msg_id,
             "prompt": result.get("confirmation_prompt", "Please confirm this action."),

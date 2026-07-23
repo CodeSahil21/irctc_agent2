@@ -21,9 +21,9 @@ _SUMMARIZE_EVERY = 10
 
 
 class ConversationManager:
-    def __init__(self, db: AsyncIOMotorDatabase, claude_service=None):
+    def __init__(self, db: AsyncIOMotorDatabase, llm_service=None):
         self._db = db
-        self._claude = claude_service  # optional — only needed for summarization
+        self._llm = llm_service  # optional — only needed for summarization
 
 
     async def open(
@@ -163,7 +163,7 @@ class ConversationManager:
                     errors=result.get("errors") or [],
                     turn_start_time=metrics.get("turn_start_time"),
                     total_latency_ms=metrics.get("total_latency_ms"),
-                    claude_calls=metrics.get("claude_calls"),
+                    llm_calls=metrics.get("llm_calls"),
                     tools_called=metrics.get("tools_called"),
                 ),
             )
@@ -179,11 +179,11 @@ class ConversationManager:
 
     async def summarize(self, conversation_id: str) -> Optional[str]:
         """
-        Generate a rolling summary of the conversation using Claude.
+        Generate a rolling summary of the conversation using the LLM.
         Replaces the previous summary — keeps context compact across many turns.
-        No-ops if claude_service is not available.
+        No-ops if llm_service is not available.
         """
-        if not self._claude:
+        if not self._llm:
             return None
 
         conv = await get_conversation(self._db, conversation_id)
@@ -210,16 +210,13 @@ class ConversationManager:
         )
 
         try:
-            response = await self._claude.chat_raw(
+            response = await self._llm.chat_raw(
                 messages=[{"role": "user", "content": prompt}],
                 system="You are a conversation summarizer for an IRCTC travel agent.",
                 temperature=0.0,
                 max_tokens=300,
             )
-            summary = "".join(
-                b.text for b in response.content
-                if getattr(b, "type", None) == "text"
-            )
+            summary = response.choices[0].message.content or ""
             await update_summary(self._db, conversation_id, summary)
             app_logger.info("Conversation summarized | id={id}", id=conversation_id)
             return summary

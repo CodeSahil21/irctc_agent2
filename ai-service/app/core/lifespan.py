@@ -2,9 +2,9 @@ import os
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from langsmith import Client
-from langsmith.wrappers import wrap_anthropic
+from langsmith.wrappers import wrap_openai
 
 from app.config.settings import get_settings
 from app.db.mongo import create_mongo_client, get_db
@@ -17,7 +17,7 @@ from app.mcp.discovery import MCPDiscovery
 from app.mcp.registry import MCPToolRegistry
 from app.mcp.transport import MCPTransport
 from app.memory.checkpoints import get_checkpointer
-from app.services.claude import ClaudeService
+from app.services.openai_service import OpenAIService
 from app.services.conversation_manager import ConversationManager
 from app.telemetry.logging import app_logger
 from app.websocket.manager import _make_manager
@@ -67,12 +67,12 @@ async def lifespan(app: FastAPI):
     else:
         app_logger.warning("LangSmith tracing is DISABLED (missing API key or tracing flag is false).")
 
-    raw_client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    traced_client = wrap_anthropic(raw_client) if (tracing_enabled and api_key) else raw_client
+    raw_client = AsyncOpenAI(api_key=settings.openai_api_key)
+    traced_client = wrap_openai(raw_client) if (tracing_enabled and api_key) else raw_client
 
-    app.state.claude_service = ClaudeService(
+    app.state.llm_service = OpenAIService(
         client=traced_client,
-        default_model=settings.anthropic_default_model,
+        default_model=settings.openai_default_model,
     )
 
     transport = MCPTransport(
@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
     app_logger.info("Checkpointer initialized (MongoDBSaver)")
 
     app.state.agent_graph = create_agent_graph(
-        claude_service=app.state.claude_service,
+        llm_service=app.state.llm_service,
         mcp_registry=app.state.mcp_registry,
         checkpointer=checkpointer,
     )
@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI):
 
     app.state.conversation_manager = ConversationManager(
         db=db,
-        claude_service=app.state.claude_service,
+        llm_service=app.state.llm_service,
     )
     app_logger.info("ConversationManager initialized.")
 
@@ -128,7 +128,7 @@ async def lifespan(app: FastAPI):
     app_logger.info(
         "Application startup complete | env={env} | model={model}",
         env=settings.app_env,
-        model=settings.anthropic_default_model,
+        model=settings.openai_default_model,
     )
 
     yield
@@ -142,7 +142,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             app_logger.error("Error flushing LangSmith traces: {error}", error=str(e))
 
-
     await mcp_client.disconnect()
 
     mongo_client.close()
@@ -150,5 +149,5 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state.checkpointer, "client"):
         app.state.checkpointer.client.close()
 
-    await app.state.claude_service.close()
+    await app.state.llm_service.close()
     app_logger.info("Shutdown complete.")

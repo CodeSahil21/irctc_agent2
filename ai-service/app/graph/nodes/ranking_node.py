@@ -2,7 +2,7 @@
 """
 Phase 12 — Candidate Ranking
 
-Pure Python deterministic ranking. Never asks Claude to sort.
+Pure Python deterministic ranking. Never uses the LLM to sort.
 
 Ranking modes (derived from intent/goal):
   cheapest   — sort by total fare ascending
@@ -136,7 +136,32 @@ def ranking_node(state: TravelState) -> Dict[str, Any]:
         return {"ranked_results": []}
 
     user_goal = state.get("user_goal") or ""
+    travel = state.get("travel") or {}
+    is_range_search = bool(travel.get("date_range"))
     mode = _detect_mode(user_goal)
+
+    # For range searches — deduplicate by trainNumber keeping the best result
+    # (lowest fare for cheapest, fastest duration for fastest, most seats for best_avail)
+    if is_range_search:
+        seen: Dict[str, Dict[str, Any]] = {}
+        for t in search_results:
+            key = str(t.get("trainNumber", ""))
+            if not key:
+                continue
+            if key not in seen:
+                seen[key] = t
+            else:
+                existing = seen[key]
+                if mode == "fastest":
+                    if (_parse_duration(t) or _MAX_DURATION) < (_parse_duration(existing) or _MAX_DURATION):
+                        seen[key] = t
+                elif mode == "best_avail":
+                    if (_parse_seats(t) or 0) > (_parse_seats(existing) or 0):
+                        seen[key] = t
+                else:  # cheapest
+                    if (_parse_fare(t) or _MAX_FARE) < (_parse_fare(existing) or _MAX_FARE):
+                        seen[key] = t
+        search_results = list(seen.values())
 
     if mode == "fastest":
         ranked = sorted(

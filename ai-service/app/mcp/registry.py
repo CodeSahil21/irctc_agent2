@@ -12,7 +12,6 @@ class MCPToolRegistry:
     """
     Dynamic tool registry backed by MCP discovery.
 
-    Replaces the hardcoded TOOL_REGISTRY + execute_tool() in tools/registry.py.
     Tool schemas come from the MCP server at startup — nothing is hardcoded here.
     """
 
@@ -64,7 +63,7 @@ class MCPToolRegistry:
     ) -> str:
         """
         Execute a tool by name via MCP.
-        Returns a JSON string in the same envelope format as the old execute_tool().
+        Returns a JSON string in the same envelope format as before.
         """
         await self._ensure_discovery()
 
@@ -97,15 +96,15 @@ class MCPToolRegistry:
 
         return json.dumps(result.to_dict())
 
-    def get_schemas_for_claude(self) -> list:
+    def get_tool_schemas(self) -> list:
         """
-        Return tool schemas in Anthropic tool-use format.
-        Used by tool_planner_node to give Claude the live tool list.
+        Return tool schemas in OpenAI function-calling format.
+        Used by tool_planner_node to pass the live tool list to the LLM.
         """
         return self._discovery.get_tools()
 
     def get_tool_schema(self, tool_name: str) -> Optional[Dict[str, Any]]:
-        """Return the schema dictionary for a specific tool."""
+        """Return the schema dictionary for a specific tool (flattened, with input_schema key)."""
         return self._discovery.get_tool_schema(tool_name)
 
     def is_known(self, tool_name: str) -> bool:

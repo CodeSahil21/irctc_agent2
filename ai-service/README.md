@@ -2,13 +2,13 @@
 
 FastAPI + LangGraph orchestration layer for the IRCTC AI assistant. This service owns the AI runtime: intent classification, slot filling, MCP tool planning and execution, train ranking, human approval interrupts, reflection, conversation persistence, and Socket.IO streaming.
 
-> **Status:** All modules verified and fully synced. Error handling hardened — no raw API errors leak to clients.
+> **Status:** Fully migrated to OpenAI SDK. All modules verified and synced. Error handling hardened — no raw API errors leak to clients.
 
 ---
 
 ## Mental model
 
-> Claude decides **what** to do. Python decides **how** to do it. MCP provides the live tool capabilities. LangGraph keeps the whole interaction stateful, resumable, and observable.
+> OpenAI decides **what** to do. Python decides **how** to do it. MCP provides the live tool capabilities. LangGraph keeps the whole interaction stateful, resumable, and observable.
 
 ---
 
@@ -19,10 +19,10 @@ FastAPI + LangGraph orchestration layer for the IRCTC AI assistant. This service
 | HTTP API | FastAPI |
 | Realtime | python-socketio (AsyncServer, ASGI-mounted) |
 | Orchestration | LangGraph (StateGraph + MongoDBSaver checkpointer) |
-| LLM | Anthropic Claude via `anthropic` SDK |
+| LLM | OpenAI via `openai` SDK (`gpt-4o-mini` default) |
 | Tool protocol | MCP Streamable HTTP (JSON-RPC 2.0) |
 | Database | MongoDB (Motor async + pymongo for checkpointer) |
-| Tracing | LangSmith |
+| Tracing | LangSmith (`wrap_openai`) |
 | Logging | Loguru |
 
 ---
@@ -39,7 +39,7 @@ flowchart TB
         Graph[LangGraph agent]
         Mem[Memory layer]
         MCPReg[MCP registry and client]
-        Claude[ClaudeService]
+        LLM[OpenAIService]
         DB[MongoDB]
     end
 
@@ -51,15 +51,14 @@ flowchart TB
     SIO --> Graph
     HTTP --> Graph
     Graph --> Mem
-    Graph --> Claude
+    Graph --> LLM
     Graph --> MCPReg
     MCPReg --> MCP
     Graph --> DB
     Mem --> DB
-    Claude --> LS
+    LLM --> LS
     Graph --> LS
 ```
-
 
 ---
 
@@ -72,6 +71,7 @@ flowchart TD
     START([START]) --> intent_node
 
     intent_node -->|general_question| response_node
+    intent_node -->|direct-exec intents| tool_executor_node
     intent_node -->|all other intents| slot_filler_node
 
     slot_filler_node -->|missing slots| response_node
@@ -99,7 +99,7 @@ flowchart TD
     response_node --> END([END])
 ```
 
-### Edge routing rules (exact code)
+### Edge routing rules
 
 | From | Condition | To |
 |---|---|---|
@@ -123,8 +123,7 @@ flowchart TD
 | `reflection_node` | failed + `reflection_retries < 1` | `tool_planner_node` |
 | `reflection_node` | failed + `reflection_retries >= 1` | `response_node` |
 
-¹ **Direct-exec intents** bypass `slot_filler_node` and `tool_planner_node` entirely: `get_saved_passengers`, `get_booking_history`, `get_reminders`, `list_classes`, `list_quotas`. These require no user input — `intent_node` pre-populates `tool_plan = [intent]` and routes straight to `tool_executor_node`.
-
+¹ **Direct-exec intents** bypass `slot_filler_node` and `tool_planner_node` entirely: `get_saved_passengers`, `get_booking_history`, `get_reminders`, `list_classes`, `list_quotas`.
 
 ---
 
@@ -133,19 +132,19 @@ flowchart TD
 ### `intent_node`
 **File:** `app/graph/nodes/intent_node.py`
 
-The entry point for every turn. Calls Claude with the `classify_intent` tool (forced tool-use, `temperature=0`) to extract:
+Calls OpenAI with the `classify_intent` function tool (forced tool-use, `temperature=0`) to extract:
 
-- `intent` — one of 30 enum values (see list below)
+- `intent` — one of 30 enum values
 - `user_goal` — one-sentence summary
 - Travel entities: `from_station`, `to_station`, `date`, `travel_class`, `quota`, `train_number`, `pnr`, `selected_passenger_names`
 
 After classification it:
-1. Normalises station names to IRCTC codes using a built-in city → code map (e.g. `"mumbai"` → `"BCT"`)
+1. Normalises station names to IRCTC codes (`"mumbai"` → `"BCT"`, etc.)
 2. Normalises date strings to ISO `YYYY-MM-DD` (handles "tomorrow", "next week", "23rd July 2026", etc.)
 3. Resolves `selected_passenger_names` against `saved_passengers` in state
-4. Merges `user_preferences` into travel context (preferred class, quota)
-5. Resets all per-turn working state via `reset_turn_state()`
-6. For **direct-exec intents** (`get_saved_passengers`, `get_booking_history`, `get_reminders`, `list_classes`, `list_quotas`) — pre-populates `tool_plan = [intent]`, sets `tool_plan_args = [{}]`, and routes straight to `tool_executor_node`, bypassing slot filler and tool planner entirely
+4. Merges `user_preferences` into travel context
+5. Resets per-turn working state via `reset_turn_state()`
+6. For direct-exec intents — pre-populates `tool_plan = [intent]`, `tool_plan_args = [{}]`, routes straight to `tool_executor_node`
 
 **Supported intents:**
 
@@ -165,13 +164,14 @@ After classification it:
 ### `slot_filler_node`
 **File:** `app/graph/nodes/slot_filler_node.py`
 
-Checks whether the primary tool's required inputs are satisfied before planning starts. Uses the **live MCP tool schema** (discovered at startup) not hardcoded lists. Falls back to static `TOOL_PRECONDITIONS` if discovery hasn't run.
+Checks whether the primary tool's required inputs are satisfied before planning. Uses the **live MCP tool schema** (discovered at startup). Falls back to static `TOOL_PRECONDITIONS` if discovery hasn't run.
 
 Philosophy — auto-resolve first, ask last:
-- `quota` → always satisfied (default `GN` applied later by arg_patcher)
-- `train_number` → satisfied if search results are already in state, or if from/to/date allow a search first
+- `quota` → always satisfied (default `GN` applied by arg_patcher)
+- `train_number` → satisfied if in travel context, search results, or **booking history in state**
+- `from_station`, `date` → satisfied if in travel context or **carried-forward booking history**
 - Only genuinely unknown user-facing fields produce a clarification question
-- One question per turn, phrased from the schema description when possible
+- One question per turn
 
 Askable slots: `from_station`, `to_station`, `date`, `travel_class`, `train_number`, `pnr`
 
@@ -180,123 +180,108 @@ Askable slots: `from_station`, `to_station`, `date`, `travel_class`, `train_numb
 ### `tool_planner_node`
 **File:** `app/graph/nodes/tool_planner_node.py`
 
-Calls Claude with the `create_tool_plan` tool (forced tool-use, `temperature=0`, `max_tokens=2048`) to produce an ordered list of `{tool, args}` steps.
+Calls OpenAI with the `create_tool_plan` function tool (forced tool-use, `temperature=0`, `max_tokens=2048`) to produce an ordered list of `{tool, args}` steps.
 
 Key behaviours:
-- The full live MCP tool list is passed as additional tools with `cache_control: ephemeral` on the last entry (prompt caching)
-- The system prompt is cached with `cache_system=True`
-- Reflection feedback from a previous retry is injected into the context
-- Sets `confirmation_required=True` if any step has `requires_confirmation` in its precondition
-- Sets `reflection_required=True` for data-heavy intents (search, availability, fare, booking, PNR history) — capped at 1 retry
+- Full live MCP tool list passed as additional OpenAI function tools
+- Cross-turn context (booking history, saved passengers) explicitly shown in planner prompt
+- Reflection feedback from a previous retry injected into context
+- Sets `confirmation_required=True` if any step has `requires_confirmation`
+- Sets `reflection_required=True` for data-heavy intents (capped at 1 retry)
 
-**Planner rules the system prompt enforces:**
-- Use station codes, not city names
-- Never repeat already-cached steps (search_results, fare, availability in state)
+**Planner rules:**
+- Use station codes not city names
+- Never repeat already-cached steps
 - Booking chain: `search_trains → check_availability → get_fare → book_ticket`
 - Live status chain: `search_train_by_number → get_live_status`
-- `check_availability`, `get_fare`, `get_live_status` share `parallel_group="post_search"` and run concurrently
+- `check_availability`, `get_fare`, `get_live_status` run concurrently (parallel group)
 - Auto-fetch saved passengers before `book_ticket` if not in context
-- To update/delete a reminder: `get_reminders` first to get the `reminderId`
-
+- Extract `trainNumber`/`pnr` from booking history in context — never ask user for data already fetched
 
 ---
 
 ### `human_approval_node`
 **File:** `app/graph/nodes/human_approval_node.py`
 
-Pauses graph execution using `langgraph.types.interrupt()`. The graph checkpoint is saved to MongoDB so the pause survives process restarts.
+Pauses graph execution using `langgraph.types.interrupt()`. Checkpoint saved to MongoDB — survives process restarts.
 
-Destructive actions that trigger this node (from `TOOL_PRECONDITIONS`):
-`book_ticket`, `cancel_ticket`, `update_booking_status`, `update_boarding_point`, `delete_reminder`
-
-The confirmation prompt is built from live state: shows train, route, date, class, fare, and passengers for bookings; PNR for cancellations. Resume value can be `bool` or string (`"yes"`, `"y"`, `"confirm"`, etc.).
+Destructive actions that trigger this: `book_ticket`, `cancel_ticket`, `update_booking_status`, `update_boarding_point`, `delete_reminder`
 
 ---
 
 ### `tool_executor_node`
 **File:** `app/graph/nodes/tool_executor_node.py`
 
-Executes one tool per graph invocation (loops via edge routing until `current_tool_index >= len(tool_plan)`).
+Executes one tool per graph invocation (loops until `current_tool_index >= len(tool_plan)`).
 
 **Sequential execution:**
-1. `patch_tool_args()` re-resolves args from live state before every call — so `book_ticket` always gets the real train number from `search_results`, not a planner guess
-2. Executes via `MCPToolRegistry.execute()` with a per-tool timeout (`asyncio.wait_for`)
-3. On error: retries up to `max_retries` times (not for `INVALID_PARAMETERS` / `UNKNOWN_TOOL`)
-4. After a permanent failure before a destructive step: aborts the rest of the plan
+1. `patch_tool_args()` re-resolves args from live state — including **booking history** for tools like `get_boarding_points`, `get_live_status`, `cancel_ticket`
+2. Executes via `MCPToolRegistry.execute()` with per-tool timeout
+3. Retries up to `max_retries` (not for `INVALID_PARAMETERS` / `UNKNOWN_TOOL`)
+4. Aborts plan after permanent failure before a destructive step
 
-**Parallel execution:**
-Tools sharing the same `parallel_group` tag (e.g. `"post_search"`) are detected automatically and fired with `asyncio.gather`. A failed tool in a parallel group aborts any downstream destructive step.
+**Parallel execution:** Tools sharing a `parallel_group` tag fire with `asyncio.gather`.
 
-**Result dispatch** — `_apply_result()` routes each tool's output to the correct state field:
+**Result dispatch — `_apply_result()`:**
 
-| Tool(s) | State field |
-|---|---|
-| `search_trains`, `recommend_trains` | `search_results` + `travel.train_number` |
-| `check_availability` | `availability` |
-| `get_fare` | `fare` |
-| `book_ticket`, `cancel_ticket`, `get_booking`, `get_pnr`, `update_*` | `booking` + `travel.pnr` |
-| `get_booking_history` | `tool_results["get_booking_history"]` |
-| `get_reminders` | `reminders` |
-| `list_classes`, `list_quotas` | `tool_results[tool_name]` |
-| `get_saved_passengers` | `saved_passengers` |
-| `find_station_code` | `travel.from_station` or `to_station` + `tool_results` |
-| everything else | `tool_results[tool_name]` |
+| Tool(s) | State field | Notes |
+|---|---|---|
+| `search_trains`, `recommend_trains` | `search_results` + `travel.train_number` | Slimmed — schedule/route arrays stripped |
+| `check_availability` | `availability` | |
+| `get_fare` | `fare` | |
+| `book_ticket`, `cancel_ticket`, `get_booking`, `get_pnr`, `update_*` | `booking` + `travel.pnr` | |
+| `get_booking_history` | `tool_results["get_booking_history"]` | Slimmed to 9 key fields — persists across turns |
+| `get_reminders` | `reminders` + `tool_results["get_reminders"]` | Dual-stored — persists across turns |
+| `get_saved_passengers` | `saved_passengers` + `tool_results["get_saved_passengers"]` | Dual-stored — persists across turns |
+| `list_classes`, `list_quotas` | `tool_results[tool_name]` | |
+| `find_station_code` | `travel.from_station` or `to_station` + `tool_results` | |
+| everything else | `tool_results[tool_name]` | Cleared next turn |
 
 ---
 
 ### `ranking_node`
 **File:** `app/graph/nodes/ranking_node.py`
 
-Pure Python, no Claude. Triggered only for `search_trains` and `recommend_trains` intents when `search_results` is non-empty.
-
-Detects ranking mode from `user_goal` keywords:
+Pure Python, no LLM. Triggered for `search_trains` / `recommend_trains` when results are present.
 
 | Mode | Trigger keywords | Sort key |
 |---|---|---|
-| `fastest` | fast, quick, shortest, direct, less time | `durationMins` / `duration` asc |
-| `best_avail` | available, seats, confirm, confirmed | seats desc → fare asc |
-| `cheapest` (default) | cheap, budget, affordable, low fare | fare asc |
+| `fastest` | fast, quick, shortest, direct | `durationMins` asc |
+| `best_avail` | available, seats, confirm | seats desc → fare asc |
+| `cheapest` (default) | cheap, budget, low fare | fare asc |
 
-Handles both flat and nested fare/availability shapes from the MCP server. Trains with unparseable sort fields keep their original relative position (stable sort with sentinel).
-
-Writes `ranked_results` to state. `response_node` uses this instead of `search_results`.
+Writes `ranked_results`. `response_node` uses this instead of `search_results`.
 
 ---
 
 ### `reflection_node`
 **File:** `app/graph/nodes/reflection_node.py`
 
-Quality-check step. Only runs when `reflection_required=True` (set by `tool_planner_node` for data-heavy intents). Hard-capped at 1 retry cycle (`reflection_retries`).
+Quality-check step. Only runs when `reflection_required=True`. Hard-capped at 1 retry.
 
-**Pre-gate (deterministic, no Claude):** If any tool has `status=failed/error` or `errors` is non-empty, immediately marks `reflection_passed=False` with that error as feedback. Claude is not called.
-
-**Claude call:** Passes `tool_history` summary and `user_goal` to the `reflect_on_results` tool (forced tool-use). Returns `{satisfied: bool, feedback: str}`.
-
-- `satisfied=True` → routes to `response_node`
-- `satisfied=False` → sets `reflection_feedback` and routes back to `tool_planner_node` for one replanning attempt
-- Any exception in reflection → fails open (`reflection_passed=True`) so it never blocks a response
+- **Pre-gate (deterministic):** If any tool failed, marks `reflection_passed=False` without calling OpenAI
+- **OpenAI call:** `reflect_on_results` function tool — returns `{satisfied, feedback}`
+- `satisfied=False` → sets `reflection_feedback` → routes back to `tool_planner_node`
+- Any exception → fails open (`reflection_passed=True`) — never blocks a response
 
 ---
 
 ### `response_node`
 **File:** `app/graph/nodes/response_node.py`
 
-Final response generation. Calls Claude (`temperature=0.7`, `max_tokens=2048`, `cache_system=True`) with:
-- Windowed conversation history (last 20 messages via `format_for_claude`)
-- `[Tool Results]` block appended to the last user message (built by `build_tool_context`)
-- Reflection feedback as a `[Quality note]` hint if present
+Final response generation. Calls OpenAI (`temperature=0.7`, `max_tokens=2048`) with:
+- Windowed conversation history (last 20 messages via `format_messages`)
+- `[Tool Results]` block appended to the last user message
+- Reflection feedback as `[Quality note]` hint if present
 - Uses `ranked_results` in place of `search_results` when available
 
-**PNR grounding:** After generation, `_ground_response()` scans the reply for 10-digit numbers. Any PNR not present verbatim in `booking`, `travel`, or `tool_results` is replaced with `[PNR unavailable]`. Prevents hallucinated PNRs.
-
+**PNR grounding:** `_ground_response()` scans the reply for 10-digit numbers. Any PNR not present verbatim in state data is replaced with `[PNR unavailable]`.
 
 ---
 
 ## Graph state (`TravelState`)
 
 **File:** `app/graph/state.py`
-
-The full state schema. All fields are `Optional` except `messages`.
 
 ```
 TravelState
@@ -309,7 +294,7 @@ TravelState
 │   ├── intent                str  — one of 30 enum values
 │   └── user_goal             str  — one-sentence summary
 │
-├── Travel Context            (persists across turns via checkpointer)
+├── Travel Context            (always persists via checkpointer)
 │   └── travel: TravelContext
 │       ├── from_station, to_station, date
 │       ├── travel_class, quota
@@ -317,15 +302,19 @@ TravelState
 │       └── selected_passengers
 │
 ├── Tool Results
-│   ├── search_results        List[dict]
+│   ├── search_results        List[dict]  — slimmed, cleared on new search intent
 │   ├── selected_train        dict
-│   ├── availability          dict
-│   ├── fare                  dict
-│   ├── booking               dict
-│   ├── reminders             List[dict]
-│   ├── saved_passengers      List[dict]
+│   ├── availability          dict        — cleared on new search intent
+│   ├── fare                  dict        — cleared on new search intent
+│   ├── booking               dict        — cleared each turn
+│   ├── reminders             List[dict]  — cleared each turn
+│   ├── saved_passengers      List[dict]  — persists for session lifetime
 │   ├── passengers            List[dict]
-│   └── tool_results          Dict[str, Any]  — generic bucket for everything else
+│   └── tool_results          Dict[str, Any]
+│       ├── get_booking_history  → persists across turns (slimmed)
+│       ├── get_saved_passengers → persists across turns
+│       ├── get_reminders        → persists across turns
+│       └── <other tools>        → cleared each turn (route, live_status, etc.)
 │
 ├── Slot Filling
 │   ├── missing_slots         List[str]
@@ -363,225 +352,136 @@ TravelState
 ├── User Preferences (long-lived)
 │   └── user_preferences: UserPreferences
 │       ├── preferred_class, preferred_quota
-│       ├── berth_preference
-│       └── senior_citizen
+│       ├── berth_preference, senior_citizen
 │
 └── Execution Metrics
     └── execution_metrics: ExecutionMetrics
         ├── turn_start_time, tools_called
-        ├── total_latency_ms
-        └── claude_calls
+        ├── total_latency_ms, llm_calls
 ```
 
+### State lifecycle rules
 
----
-
-## MCP layer
-
-### Tool discovery (`app/mcp/discovery.py`)
-At startup `MCPDiscovery.discover()` calls `tools/list` on the MCP server using a probe user email. Tools are normalised to Anthropic tool format (`input_schema` camelCase → snake_case). The registry is refreshed lazily if a tool call references an unknown tool name.
-
-### Tool registry (`app/mcp/registry.py`)
-`MCPToolRegistry.execute()` is the single call point from the graph:
-1. Checks `_discovery.is_known(tool_name)` — triggers refresh if not
-2. Strips hallucinated args not in the tool's schema properties
-3. Validates required fields — returns `INVALID_PARAMETERS` error without calling MCP if missing
-4. Calls `MCPClient.call_tool()` and returns `json.dumps(result.to_dict())`
-
-### MCP client (`app/mcp/client.py`)
-- One `MCPSession` per `user_email` (holds `mcp-session-id` header)
-- `_ensure_initialized()` sends the `initialize` + `notifications/initialized` handshake on first use
-- `call_tool()` retries up to 3 times with backoff `[0.5s, 1.0s, 2.0s]`
-- `MCPSessionError` / `MCPConnectionError` → session reset + retry
-- Non-retryable errors (`MCPToolNotFoundError`, `MCPInvalidResponseError`, `MCPAuthError`) → immediate `ToolResult(success=False)`
-
-### Transport (`app/mcp/transport.py`)
-`POST /mcp` with `Content-Type: application/json` and headers:
-- `x-user-email` (required)
-- `x-user-name` (optional)
-- `mcp-session-id` (once established)
-
-Parses both plain JSON and `data: ...` SSE-framed responses. Maps HTTP 401/403/404/5xx to typed `MCPError` subclasses.
-
-### Arg patcher (`app/graph/arg_patcher.py`)
-Re-resolves tool arguments from live state immediately before execution. Only fills blanks — never overwrites values the planner set. Bridges snake_case travel context to camelCase MCP schemas (e.g. `from_station` → `fromStation`).
-
----
-
-## Tool preconditions
-
-**File:** `app/graph/tool_preconditions.py`
-
-29 tools are registered with:
-- `required_slots` — what the slot filler checks
-- `requires_confirmation` — whether `human_approval_node` fires
-- `max_retries` — per-tool retry budget in the executor
-- `cacheable` / `cache_key` — metadata (informational, not yet enforced in executor)
-- `parallel_group` — tools sharing a tag run concurrently (`"post_search"`: `check_availability`, `get_fare`, `get_live_status`)
-- `timeout_seconds` — per-tool `asyncio.wait_for` timeout
-
-Tools requiring confirmation: `book_ticket`, `cancel_ticket`, `update_booking_status`, `update_boarding_point`, `delete_reminder`
-
+| Field | Lifecycle |
+|---|---|
+| `messages` | Accumulates via `add_messages` reducer — windowed to 20 before LLM calls |
+| `travel` | Never cleared — checkpoint restores across sessions |
+| `saved_passengers` | Never cleared — fetched once per session |
+| `tool_results["get_booking_history"]` | Persists across turns — slimmed to 9 key fields |
+| `tool_results["get_saved_passengers"]` | Persists across turns |
+| `tool_results["get_reminders"]` | Persists across turns — used for update/delete |
+| `search_results`, `availability`, `fare` | Persist only within continuation intents; cleared on new search |
+| `booking`, `reminders` | Cleared each turn — fetched fresh on demand |
+| `tool_results[other]` | Cleared each turn (route, live_status, platform, etc.) |
 
 ---
 
 ## Memory layers
 
 ### Layer 1 — Conversation window (`app/memory/conversation_memory.py`)
-`format_for_claude()` applies a sliding window of 20 messages (10 turns) before every Claude call. Always anchors the first `HumanMessage` for context, trims from the middle. Skips `ToolMessage` entries — those surface through `build_tool_context` instead.
+`format_messages()` applies a sliding window of 20 messages before every LLM call. Always anchors the first `HumanMessage`, trims from the middle. Skips `ToolMessage` entries — those surface through `build_tool_context` instead.
 
 ### Layer 2 — Conversation persistence (`app/services/conversation_manager.py`)
-`ConversationManager` owns the full lifecycle:
 
 | Method | What it does |
 |---|---|
-| `open(conversation_id, user_email)` | Load or create conversation doc; load `UserPreferences` from DB; return both |
-| `save_turn(...)` | Upsert conversation, increment turn counter, save user + assistant messages, save `ExecutionLogDoc`; trigger summary every 10 turns |
-| `summarize(conversation_id)` | Rolling Claude-generated summary (max 200 words, replaces previous); no-op if `claude_service` is None |
+| `open(conversation_id, user_email)` | Load or create conversation; load `UserPreferences` from DB |
+| `save_turn(...)` | Upsert conversation, increment turn, save messages, save `ExecutionLogDoc`; trigger summary every 10 turns |
+| `summarize(conversation_id)` | Rolling LLM-generated summary (max 200 words) — no-op if `llm_service` is None |
 | `build_context(conversation_id)` | Returns `{summary, messages, turn_count}` for resume flows |
 | `close(user_email, prefs)` | Persist updated `UserPreferences` back to MongoDB |
-| `get_history` / `get_recent` | Query helpers for the REST API |
 
 ### Layer 3 — User preferences (`app/memory/preference_memory.py`)
-Loaded at `conversation_manager.open()` and seeded into `state["user_preferences"]`. `intent_node` merges them into travel context each turn (preferred class, quota). Persisted back at `close()` when preferences change.
+Loaded at `open()`, seeded into `state["user_preferences"]`. Merged into travel context each turn by `intent_node`. Persisted at `close()`.
 
 ### Checkpointing (`app/memory/checkpoints.py`)
-`MongoDBSaver` (from `langgraph-checkpoint-mongodb`) using a dedicated sync `pymongo` client. LangGraph's async interface offloads blocking pymongo calls to a thread executor. Enables `interrupt()` / `Command(resume=...)` across process restarts.
+`MongoDBSaver` (from `langgraph-checkpoint-mongodb`) using a sync `pymongo` client. LangGraph's async interface offloads blocking pymongo calls to a thread executor. Enables `interrupt()` / `Command(resume=...)` across process restarts.
+
+The same `thread_id` (conversation ID) is used on every `ainvoke` call, so LangGraph automatically loads the full previous state before each turn and saves it after.
 
 ### Context builder (`app/memory/context_builder.py`)
-Two functions:
-- `build_tool_context(state)` — builds the `[Tool Results]` block for `response_node` (search results, availability, fare, booking, reminders, saved passengers, generic tool_results, errors)
-- `build_planner_context(state, tools_summary)` — builds the full context message for `tool_planner_node` (intent, goal, travel context, all cached results, preferences, turn count, available tools summary)
+- `build_tool_context(state)` — builds the `[Tool Results]` block for `response_node`
+- `build_planner_context(state, tools_summary)` — builds the full context for `tool_planner_node`, explicitly surfaces carried-forward booking history and saved passengers so the LLM can extract train numbers and PNRs without asking the user
+
+---
+
+## MCP layer
+
+### Tool discovery (`app/mcp/discovery.py`)
+At startup `MCPDiscovery.discover()` fetches `tools/list` from the MCP server. Tools are normalised to **OpenAI function-calling format**: `{"type": "function", "function": {"name", "description", "parameters"}}`. Registry refreshes lazily if an unknown tool is called.
+
+`get_tool_schema(name)` returns a flattened dict with `input_schema` key for slot filler compatibility.
+
+### Tool registry (`app/mcp/registry.py`)
+`MCPToolRegistry.execute()` — single call point from the graph:
+1. Checks `is_known(tool_name)` — triggers refresh if not
+2. Strips hallucinated args not in schema properties
+3. Validates required fields — returns `INVALID_PARAMETERS` without calling MCP if missing
+4. Calls `MCPClient.call_tool()`, returns `json.dumps(result.to_dict())`
+
+`get_tool_schemas()` returns all tools in OpenAI function format for `tool_planner_node`.
+
+### Arg patcher (`app/graph/arg_patcher.py`)
+Re-resolves tool arguments from live state immediately before execution. Only fills blanks — never overwrites planner values. Bridges snake_case travel context to camelCase MCP schemas.
+
+`_from_booking_history(state)` — extracts `trainNumber`, `source`, `journeyDate`, `pnr` from `tool_results["get_booking_history"]` or `state.booking`. Used by `get_boarding_points`, `get_live_status`, `cancel_ticket`, `update_boarding_point` to auto-fill args when user refers to a previously fetched booking.
 
 ---
 
 ## Error handling
 
-All errors are sanitised before reaching any client. Raw API messages, stack traces, and account information never appear in HTTP responses or Socket.IO events.
-
 ### Exception hierarchy (`app/core/exceptions.py`)
 
-| Exception | HTTP status | Code | When raised |
-|---|---|---|---|
-| `ValidationException` | 400 | `VALIDATION_ERROR` | Malformed request to Claude (non-billing) |
-| `AuthenticationException` | 401 | `AUTHENTICATION_ERROR` | Anthropic API key invalid |
-| `RateLimitException` | 429 | `RATE_LIMIT_EXCEEDED` | Anthropic rate limit hit |
-| `ModelProviderException` | 502 | `MODEL_PROVIDER_ERROR` | Generic Anthropic API error |
-| `ServiceUnavailableException` | 503 | `SERVICE_UNAVAILABLE` | Connection error, timeout, or **credit balance too low** |
-| `NotFoundException` | 404 | `NOT_FOUND` | Resource not found |
-
-### Credit / billing errors
-Anthropic returns a 400 `BadRequestError` when the account has insufficient credits. `ClaudeService` detects this by checking for `"credit balance"` or `"billing"` in the error message and raises `ServiceUnavailableException` with the message `"The AI service is temporarily unavailable. Please try again later."` — the raw Anthropic error string is never forwarded.
-
-### Error path by transport
-
-**HTTP (`/agent`, `/chat`, `/chat/stream`):**
-- `BaseAPIException` subclasses propagate to `core/handlers.py` which returns a structured `ErrorResponse` JSON body
-- All other unhandled exceptions in `/agent` are caught and re-raised as `503 HTTPException` with a generic safe message
-- SSE stream errors emit `data: {"error": "<safe message>"}` and close the stream
-
-**Socket.IO:**
-- `on_query_send` and `on_resume` catch all exceptions and emit `message:error {id, error}` using `_safe_error_message(exc)`: returns `exc.message` for domain exceptions, `"Something went wrong. Please try again."` for everything else
-
-### Global FastAPI handler (`app/core/handlers.py`)
-Three handlers registered at startup:
-- `BaseAPIException` → structured `ErrorResponse` JSON at the exception's own status code
-- `RequestValidationError` → 422 with Pydantic error details
-- `Exception` → 500 with generic message (never exposes traceback)
-
----
-
-## Request lifecycle
-
-### Socket.IO path (primary)
-
-```
-client  →  query:send {id, content}
-server  →  query:ack  {id}
-server  →  agent:typing {isTyping: true}
-server  →  tool:start {tool, index, total}   (per tool, from astream_events)
-server  →  tool:done  {tool, index}          (on success)
-server  →  tool:failed {tool, index, error}  (on failure)
-server  →  message:chunk {id, delta}         (4-char chunks, 10ms apart)
-server  →  message:complete {message}
-server  →  agent:typing {isTyping: false}
-```
-
-On interrupt (destructive action pending confirmation):
-```
-server  →  agent:interrupt {id, prompt}
-client  →  resume {id, approved: bool}
-server  →  [continues from checkpoint]
-server  →  message:complete {message}
-```
-
-Tool progress events are derived from `astream_events(version="v2")` — the manager tracks `tool_planner_node` output to know the plan, then emits start/done/failed as `tool_executor_node` chain events fire.
-
-### HTTP path
-
-- `POST /api/v1/agent` — full graph run, returns final state summary as JSON
-- `POST /api/v1/chat` — plain Claude call via `ChatService`, no graph
-- `POST /api/v1/chat/stream` — SSE streaming Claude call via `ChatService`
-
-Resume via HTTP: send `{resume: true, resume_value: bool, conversation_id: ...}` — calls `agent_graph.ainvoke(Command(resume=resume_value), config)`.
-
-
----
-
-## API reference
-
-All REST endpoints are under `/api/v1`.
-
-### Health
-- `GET /api/v1/health` — liveness probe, returns `{status, environment}`
-
-### Chat (no graph)
-- `POST /api/v1/chat` — plain Claude response (`ChatRequest` → `ChatResponse`)
-- `POST /api/v1/chat/stream` — SSE streaming Claude response
-
-### Agent (full graph)
-- `POST /api/v1/agent` — run or resume the LangGraph agent
-
-`AgentRequest` fields:
-
-| Field | Type | Purpose |
+| Exception | HTTP status | When raised |
 |---|---|---|
-| `message` | `str` | User message (empty string ok for resume) |
-| `conversation_id` | `str?` | Thread ID for checkpointer |
-| `user_email` | `str?` | Used for MCP auth headers and preference loading |
-| `user_name` | `str?` | Passed to MCP and stored in conversation |
-| `resume` | `bool` | `true` to resume an interrupt |
-| `resume_value` | `bool?` | Approval decision for the interrupt |
-| `travel_context` | `dict?` | Seed `state.travel` on first message |
-| `search_results` | `list?` | Pre-seed results (skip search) |
-| `selected_train` | `dict?` | Pre-selected train |
-| `availability` | `dict?` | Pre-fetched availability |
-| `fare` | `dict?` | Pre-fetched fare |
-| `passengers` | `list?` | Passenger list |
-| `booking` | `dict?` | Existing booking context |
+| `ValidationException` | 400 | Malformed request to OpenAI (non-billing) |
+| `AuthenticationException` | 401 | OpenAI API key invalid |
+| `RateLimitException` | 429 | OpenAI rate limit hit |
+| `ModelProviderException` | 502 | Generic OpenAI API error |
+| `ServiceUnavailableException` | 503 | Connection error, timeout, or quota/billing issue |
 
-Response includes: `message`, `intent`, `travel_context`, `search_results`, `selected_train`, `availability`, `fare`, `booking`, `confirmation_required`, `confirmation_prompt`, `interrupted`, `errors`
-
-### Conversations
-- `GET /api/v1/conversations/{id}/messages?limit=50` — message history
-- `GET /api/v1/conversations/{id}/context` — summary + recent messages for resume
-- `GET /api/v1/conversations/user/{email}?limit=20` — recent conversations
-- `POST /api/v1/conversations/{id}/summarize` — manually trigger rolling summary
+All exceptions are sanitised — raw SDK messages, stack traces, and account info never reach clients.
 
 ---
 
-## Socket.IO events
+## Configuration
 
-Defined in `app/websocket/events.py`.
+All settings in `app/config/settings.py` via `pydantic-settings`.
 
-**Client → server:** `query:send`, `resume`
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `OPENAI_API_KEY` | ✅ | — | Must start with `sk-` |
+| `OPENAI_DEFAULT_MODEL` | | `gpt-4o-mini` | Model used for all LLM calls |
+| `APP_NAME` | | `ai-service` | |
+| `APP_ENV` | | `development` | |
+| `DEBUG` | | `false` | |
+| `LOG_LEVEL` | | `INFO` | |
+| `MCP_SERVER_URL` | | `http://localhost:3000` | |
+| `MCP_SERVER_TIMEOUT` | | `30.0` | seconds |
+| `MONGO_URL` | | `mongodb://localhost:27017` | |
+| `MONGO_DB` | | `irctc_ai` | |
+| `JWT_SECRET` | | `change-me` | ⚠️ Set a strong secret in production |
+| `JWT_ALGORITHM` | | `HS256` | |
+| `LANGSMITH_TRACING` | | `true` | |
+| `LANGSMITH_API_KEY` | | — | Required for tracing |
+| `LANGSMITH_PROJECT` | | `default` | |
+| `LANGSMITH_ENDPOINT` | | `https://api.smith.langchain.com` | |
 
-**Server → client:** `query:ack`, `agent:typing`, `tool:start`, `tool:done`, `tool:failed`, `message:chunk`, `message:complete`, `message:error`, `agent:interrupt`
+---
 
-CORS origins configured: `http://localhost:3000`, `http://localhost:3001`
+## Running locally
 
-JWT auth: the `connect` event reads `auth.token`, verifies it with `jwt_secret`, extracts `email` and `name`. Falls back to `auth.userEmail` / `auth.userName` if no token.
+```bash
+# Install dependencies (using uv)
+uv sync
 
+# Copy and fill environment variables
+cp .env.example .env
+# → set OPENAI_API_KEY
+
+# Start the service
+uv run uvicorn app.main:app --reload --port 8001
+```
 
 ---
 
@@ -590,76 +490,72 @@ JWT auth: the `connect` event reads `auth.token`, verifies it with `jwt_secret`,
 ```
 ai-service/
 ├── app/
-│   ├── main.py                  ASGI entrypoint — FastAPI + Socket.IO mount, CORS, logging
+│   ├── main.py                  ASGI entrypoint — FastAPI + Socket.IO mount
 │   ├── api/
-│   │   ├── routes.py            Central router aggregating all sub-routers
+│   │   ├── routes.py            Central router
 │   │   ├── chat.py              POST /chat, /chat/stream, /agent
-│   │   ├── conversations.py     GET/POST conversation history endpoints
+│   │   ├── conversations.py     Conversation history endpoints
 │   │   ├── health.py            GET /health
-│   │   └── dependencies.py      FastAPI dependency injection (services, graph, db, registry)
+│   │   └── dependencies.py      FastAPI dependency injection
 │   ├── auth/
 │   │   ├── jwt.py               verify_jwt, extract_user_from_token
 │   │   └── current_user.py      CurrentUser dataclass
 │   ├── config/
-│   │   ├── settings.py          Pydantic BaseSettings, get_settings() lru_cache
+│   │   ├── settings.py          Pydantic BaseSettings (OPENAI_API_KEY, OPENAI_DEFAULT_MODEL, etc.)
 │   │   └── constants.py         App-level string constants
 │   ├── core/
-│   │   ├── lifespan.py          Startup/shutdown: Claude, MCP, MongoDB, checkpointer, graph, Socket.IO
+│   │   ├── lifespan.py          Startup: OpenAI client → MCP → MongoDB → checkpointer → graph
 │   │   ├── exceptions.py        BaseAPIException hierarchy
 │   │   └── handlers.py          FastAPI exception handlers
 │   ├── db/
-│   │   ├── models.py            Pydantic docs: MessageDoc, ConversationDoc, UserPreferenceDoc, ExecutionLogDoc
+│   │   ├── models.py            MessageDoc, ConversationDoc, UserPreferenceDoc, ExecutionLogDoc
 │   │   ├── mongo.py             Motor client factory
-│   │   └── repositories/
-│   │       ├── conversation_repo.py
-│   │       ├── preference_repo.py
-│   │       └── execution_repo.py
+│   │   └── repositories/        conversation_repo, preference_repo, execution_repo
 │   ├── graph/
-│   │   ├── state.py             TravelState TypedDict (full schema)
-│   │   ├── builder.py           create_agent_graph() — wires nodes + edges + checkpointer
+│   │   ├── state.py             TravelState TypedDict
+│   │   ├── builder.py           create_agent_graph() — nodes + edges + checkpointer
 │   │   ├── edges.py             7 conditional edge routing functions
-│   │   ├── interrupts.py        HUMAN_APPROVAL_NODES set derived from TOOL_PRECONDITIONS
-│   │   ├── tool_preconditions.py  ToolPrecondition dataclass + TOOL_PRECONDITIONS dict (29 tools)
-│   │   ├── arg_patcher.py       patch_tool_args() — deterministic arg resolution from live state
+│   │   ├── interrupts.py        HUMAN_APPROVAL_NODES set
+│   │   ├── tool_preconditions.py  ToolPrecondition dataclass + 29 tool configs
+│   │   ├── arg_patcher.py       patch_tool_args() + _from_booking_history()
 │   │   └── nodes/
-│   │       ├── intent_node.py
-│   │       ├── slot_filler_node.py
-│   │       ├── tool_planner_node.py
-│   │       ├── tool_executor_node.py
-│   │       ├── human_approval_node.py
-│   │       ├── ranking_node.py
-│   │       ├── reflection_node.py
-│   │       ├── response_node.py
-│   │       └── planner_node.py  (backward-compat re-export of intent_node)
+│   │       ├── intent_node.py       OpenAI classify_intent → entity extraction
+│   │       ├── slot_filler_node.py  Schema-driven slot satisfaction check
+│   │       ├── tool_planner_node.py OpenAI create_tool_plan → ordered step list
+│   │       ├── tool_executor_node.py Sequential/parallel MCP tool execution
+│   │       ├── human_approval_node.py LangGraph interrupt for destructive actions
+│   │       ├── ranking_node.py      Pure Python train sorting
+│   │       ├── reflection_node.py   OpenAI quality check with retry
+│   │       └── response_node.py     OpenAI final response generation
 │   ├── mcp/
 │   │   ├── client.py            MCPClient — session management, retry, JSON-RPC
-│   │   ├── discovery.py         MCPDiscovery — startup tool list fetch + cache
+│   │   ├── discovery.py         MCPDiscovery — startup tool fetch, OpenAI function format
 │   │   ├── registry.py          MCPToolRegistry — arg validation + execute bridge
-│   │   ├── transport.py         MCPTransport — HTTP POST /mcp, SSE parsing, session cleanup
+│   │   ├── transport.py         MCPTransport — HTTP POST /mcp, SSE parsing
 │   │   ├── normalizer.py        ToolResult dataclass + normalize_mcp_response()
-│   │   ├── session.py           MCPSession dataclass (per-user session state + metrics)
-│   │   └── exceptions.py        MCPError hierarchy (Connection, Timeout, Session, Auth, Schema)
+│   │   ├── session.py           MCPSession (per-user session state)
+│   │   └── exceptions.py        MCPError hierarchy
 │   ├── memory/
 │   │   ├── checkpoints.py       MongoDBSaver factory
 │   │   ├── context_builder.py   build_tool_context(), build_planner_context()
-│   │   ├── conversation_memory.py  Sliding window + format_for_claude()
+│   │   ├── conversation_memory.py  format_messages() — 20-msg sliding window
 │   │   ├── preference_memory.py    load/persist/merge user preferences
-│   │   └── working_memory.py    get_working_snapshot(), reset_turn_state(), increment_tool_metric()
+│   │   └── working_memory.py    reset_turn_state(), _carry_forward_tool_results()
 │   ├── schemas/
 │   │   ├── chat.py              ChatRequest, ChatResponse, AgentRequest, UsageInfo
 │   │   ├── errors.py            ErrorDetail, ErrorResponse
 │   │   └── health.py            HealthResponse
 │   ├── services/
-│   │   ├── claude.py            ClaudeService — chat_raw(), stream_chat(), close()
+│   │   ├── openai_service.py    OpenAIService — chat_raw(), stream_chat(), close()
 │   │   ├── chat.py              ChatService — send_message(), stream_message()
 │   │   └── conversation_manager.py  ConversationManager lifecycle
 │   ├── telemetry/
-│   │   └── logging.py           Loguru setup, InterceptHandler, app_logger
+│   │   └── logging.py           Loguru setup, app_logger
 │   ├── types/
-│   │   └── chat.py              build_complete_message() for Socket.IO message:complete
+│   │   └── chat.py              build_complete_message() for Socket.IO
 │   └── websocket/
-│       ├── manager.py           Socket.IO event handlers + _run_graph() + _stream_chunks()
-│       ├── connections.py       SocketSession dataclass + in-memory session store
+│       ├── manager.py           Socket.IO handlers + _run_graph() + _stream_chunks()
+│       ├── connections.py       SocketSession + in-memory session store
 │       └── events.py            Event name constants
 ├── tests/
 │   ├── test_arg_patcher.py
@@ -672,65 +568,15 @@ ai-service/
 └── README.md
 ```
 
-
----
-
-## Configuration
-
-All settings in `app/config/settings.py` via `pydantic-settings` (reads `.env`).
-
-| Variable | Required | Default | Notes |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ | — | Must start with `sk-ant` |
-| `ANTHROPIC_DEFAULT_MODEL` | | `claude-haiku-4-5` | Model used for all Claude calls unless overridden per-request |
-| `APP_NAME` | | `ai-service` | |
-| `APP_ENV` | | `development` | Set to `production` for JSON logging + hidden docs |
-| `DEBUG` | | `false` | Enables uvicorn hot-reload |
-| `LOG_LEVEL` | | `INFO` | |
-| `MCP_SERVER_URL` | | `http://localhost:3000` | Base URL of the IRCTC MCP server |
-| `MCP_SERVER_TIMEOUT` | | `30.0` | HTTP timeout for MCP requests (seconds) |
-| `MONGO_URL` | | `mongodb://localhost:27017` | |
-| `MONGO_DB` | | `irctc_ai` | |
-| `JWT_SECRET` | | `change-me` | ⚠️ Logs a warning if left as default — set a strong secret |
-| `JWT_ALGORITHM` | | `HS256` | |
-| `LANGSMITH_TRACING` | | `true` | Set to `false` to disable |
-| `LANGSMITH_API_KEY` | | — | Required for tracing |
-| `LANGSMITH_PROJECT` | | `default` | |
-| `LANGSMITH_ENDPOINT` | | `https://api.smith.langchain.com` | |
-
----
-
-## Running locally
-
-```bash
-# Install dependencies
-pip install -e ".[dev]"
-
-# Copy and fill environment variables
-cp .env.example .env
-
-# Start the service (Socket.IO + FastAPI on port 8000)
-uvicorn app.main:app --reload
-```
-
-With Docker Compose (from repo root):
-
-```bash
-docker compose up --build ai-service
-```
-
-The service requires MongoDB and the IRCTC MCP server to be reachable. MCP tool discovery runs at startup with 5 attempts and exponential backoff. If discovery fails the service still starts and retries lazily on the first tool call.
-
 ---
 
 ## Development notes
 
-- `app/main.py` — ASGI entrypoint: `socketio.ASGIApp(sio, other_asgi_app=_fastapi_app)`. The Socket.IO server is mounted as a sub-ASGI app so both share one port.
-- `app/core/lifespan.py` — startup order matters: Claude → MCP transport → MCP discovery → MongoDB → checkpointer → graph compile → ConversationManager → Socket.IO manager wiring.
-- `app/graph/builder.py` — adding a new node requires: adding to `StateGraph`, adding a conditional edge, and exporting from `app/graph/nodes/__init__.py`.
-- `app/graph/tool_preconditions.py` — adding a new MCP tool: add a `ToolPrecondition` entry here; slot filler and executor will pick it up automatically.
-- Reflection is intentionally capped at 1 retry (`reflection_retries >= 1` → always route to `response_node`). To increase it, change the cap in both `tool_planner_node` and `edges.py`.
-- The checkpointer uses sync pymongo (`pymongo>=4.7.0` is a direct dependency in `pyproject.toml`). LangGraph's async interface offloads blocking pymongo calls to a thread executor. If you see checkpoint-related blocking, check thread pool saturation under high concurrency.
-- LangSmith tracing wraps the Anthropic client via `langsmith.wrappers.wrap_anthropic` at startup. All Claude calls appear as child spans under the graph trace automatically.
-- **Error safety:** `ClaudeService` maps all Anthropic SDK exceptions to typed domain exceptions before they leave the service layer. Never add `str(e.message)` or raw exception strings to user-facing responses — use the `BaseAPIException` hierarchy or the `_safe_error_message()` / `_safe_stream_error()` helpers in the transport layer.
-- `app/graph/nodes/planner_node.py` is a backward-compat shim re-exporting `intent_node` — it is not used internally and exists only to avoid breaking external imports.
+- **Startup order in `lifespan.py`:** OpenAI client → LangSmith wrap → MCP transport → MCP discovery → MongoDB → checkpointer → graph compile → ConversationManager → Socket.IO manager wiring. Order matters.
+- **Adding a new node:** add to `StateGraph`, add conditional edge in `edges.py`, export from `app/graph/nodes/__init__.py`.
+- **Adding a new MCP tool:** add a `ToolPrecondition` entry in `tool_preconditions.py`. Slot filler and executor pick it up automatically.
+- **Tool format:** MCP tools are normalised to OpenAI function-calling format in `discovery.py`. The slot filler uses a flattened `input_schema` key via `get_tool_schema()`.
+- **Reflection cap:** 1 retry (`reflection_retries >= 1` → always route to `response_node`). Change cap in both `tool_planner_node.py` and `edges.py`.
+- **LangSmith tracing:** `wrap_openai(raw_client)` at startup wraps all OpenAI calls. `@traceable` decorators on Socket.IO handlers, `ChatService`, and `MCPToolRegistry.execute` provide full trace coverage.
+- **State size:** Keep state lean. `search_results` strips schedule/route arrays (`_slim_train`). `get_booking_history` strips to 9 key fields (`_slim_booking`). Only 3 `tool_results` keys persist across turns — everything else is cleared by `_carry_forward_tool_results()`.
+- **`planner_node.py`** is a backward-compat shim re-exporting `intent_node` — not used internally.
