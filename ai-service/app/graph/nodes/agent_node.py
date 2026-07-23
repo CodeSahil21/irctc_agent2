@@ -1,7 +1,7 @@
 import json
 import re
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -9,6 +9,57 @@ _MAX_LOOP = 8
 
 # Grounding: Indian Railways PNRs are exactly 10 digits.
 _PNR_RE = re.compile(r"\b\d{10}\b")
+
+# ---------------------------------------------------------------------------
+# Required slots per tool — used to detect mid-collection state and tell the
+# model exactly which fields are still missing so it asks the right question.
+# ---------------------------------------------------------------------------
+
+_TOOL_REQUIRED_SLOTS: Dict[str, List[str]] = {
+    "book_ticket": [
+        "trainNumber", "journeyDate", "fromStation", "toStation",
+        "travelClass", "quota", "passengers",
+    ],
+    "cancel_ticket":         ["pnr"],
+    "check_availability":    ["trainNumber", "journeyDate", "fromStation", "toStation", "travelClass"],
+    "get_fare":              ["trainNumber", "journeyDate", "fromStation", "toStation", "travelClass"],
+    "get_pnr":               ["pnr"],
+    "get_booking":           ["pnr"],
+    "update_booking":        ["pnr"],
+    "get_live_status":       ["trainNumber", "journeyDate"],
+    "get_route":             ["trainNumber"],
+    "get_train_schedule":    ["trainNumber"],
+    "get_platform":          ["trainNumber", "stationCode"],
+    "get_seat_map":          ["trainNumber", "journeyDate", "travelClass"],
+    "get_boarding_points":   ["trainNumber", "journeyDate", "fromStation"],
+    "search_trains":         ["fromStation", "toStation", "journeyDate"],
+    "search_stations":       ["query"],
+    "find_station":          ["query"],
+    "create_reminder":       ["trainNumber", "reminderType", "reminderTime"],
+    "manage_reminder":       ["action"],
+    "add_saved_passenger":   ["name", "age", "gender"],
+}
+
+# Human-readable labels for slot names shown in the context block
+_SLOT_LABELS: Dict[str, str] = {
+    "trainNumber":   "train number",
+    "journeyDate":   "journey date (YYYY-MM-DD)",
+    "fromStation":   "origin station code",
+    "toStation":     "destination station code",
+    "travelClass":   "travel class (e.g. SL, 3A, 2A, 1A)",
+    "quota":         "quota (default: GN)",
+    "passengers":    "passenger details (name, age, gender for each)",
+    "pnr":           "PNR number",
+    "stationCode":   "station code",
+    "query":         "search query",
+    "action":        "action (create/update/delete)",
+    "reminderType":  "reminder type",
+    "reminderTime":  "reminder time",
+    "name":          "passenger name",
+    "age":           "passenger age",
+    "gender":        "passenger gender",
+}
+
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -26,34 +77,40 @@ Always resolve them to an explicit YYYY-MM-DD date before calling any tool. \
 NEVER use a date from 2023 or any year other than the current year unless the \
 user explicitly provides a past date.
 
+SLOT-FILLING PROTOCOL
+When you need to call a tool but one or more required arguments are missing:
+1. Check the CURRENT SESSION CONTEXT below — values already collected are listed \
+under "Collecting details for <tool>". Do NOT re-ask for anything already there.
+2. Ask the user for exactly ONE missing field at a time. Be specific: tell them \
+what you need and why (e.g. "Which travel class would you like — SL, 3A, 2A or 1A?").
+3. As soon as ALL required fields are available (from context + conversation), \
+call the tool immediately — do NOT ask for confirmation or summarise first.
+4. If the user refuses to provide a required field after being asked explicitly, \
+tell them clearly: "I cannot proceed with [action] without [field]. Please provide \
+it when you're ready." Then stop — do not guess or use a placeholder value.
+5. Never call a tool with a guessed, placeholder, or incomplete argument. \
+A wrong booking is worse than no booking.
+
 BOOKING RULES
-- Before calling book_ticket, you MUST have ALL of these: trainNumber, \
-journeyDate (YYYY-MM-DD), fromStation, toStation, travelClass, passengers list, quota. \
-- If journeyDate is not in the session context, call check_availability for the \
-selected train first — the response will include journeyDate. \
-- Never guess or omit journeyDate. If you truly cannot determine it, ask the user \
-for the exact travel date before proceeding. \
-- When the user picks a train from search results, call check_availability for that \
-train (with the class they want) before calling book_ticket — this confirms seats \
-and captures the journey date in one step. \
-- Passengers: if the user says "use my saved passenger" or refers to a passenger by \
-name from the saved list, use those exact details. Do not ask for details already in context.
+- Before calling book_ticket, you MUST have ALL of: trainNumber, journeyDate \
+(YYYY-MM-DD), fromStation, toStation, travelClass, passengers (name/age/gender \
+for each), quota (default GN if not specified). \
+- If journeyDate is not in context, call check_availability for the selected train \
+first — the response includes journeyDate. \
+- If the user says "use my saved passenger" or names a passenger from the saved \
+list, use those exact details — do not re-ask. \
+- Do NOT ask "shall I proceed?" before booking — the system handles confirmation \
+separately after you call book_ticket. Just call it.
 
 CORE RULES
 - Use tools to get real data. NEVER invent or guess PNRs, train numbers, fares, \
 seat counts, or availability.
-- If you need a piece of information to proceed (origin station, date, which train, \
-passenger details, PNR) and it is not already in the conversation or tool results — \
-ask the user in plain text, one question at a time. Never call a tool with a guessed \
-or placeholder value.
 - Resolve station names/cities to codes with find_station before using them \
 elsewhere, unless you already have a valid 2–5 letter station code.
 - When comparing several trains (fares, availability, etc.), emit all relevant tool \
 calls IN THE SAME response turn — the system executes them concurrently.
 - Prefer recommend_trains over manually chaining search_trains + check_availability \
 + get_fare when the user just wants a ranked shortlist.
-- Do NOT ask "shall I proceed?" before booking, cancelling, or deleting — the \
-system handles confirmation separately right after you call that tool. Just call it.
 - If the result shows the user declined to confirm, tell them plainly it was not \
 performed. Do not retry without a new explicit request.
 - Use Markdown tables for lists of trains. Show fares with ₹ and include the fare \
@@ -72,6 +129,12 @@ CONTEXT
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _missing_slots(tool_name: str, collected: Dict[str, Any]) -> List[str]:
+    """Return the list of required slot names not yet present in collected."""
+    required = _TOOL_REQUIRED_SLOTS.get(tool_name, [])
+    return [s for s in required if not collected.get(s)]
+
+
 def _build_context(state: Dict[str, Any]) -> str:
     lines: List[str] = [f"- Signed in as: {state.get('user_email') or 'unknown'}"]
 
@@ -86,9 +149,6 @@ def _build_context(state: Dict[str, Any]) -> str:
         lines.append("- Senior citizen discount applies")
 
     persistent = state.get("persistent_results") or {}
-    # Use `is not None` so an empty list is still surfaced — the model needs to
-    # know the tool was already called and returned no results, otherwise it
-    # will either skip the tool (and hallucinate) or call it again unnecessarily.
     history = persistent.get("get_booking_history")
     if history is not None:
         if history:
@@ -106,24 +166,44 @@ def _build_context(state: Dict[str, Any]) -> str:
         names = ", ".join(p.get("name", "?") for p in saved)
         lines.append(f"- Saved passengers: {names}")
 
+    # ── Pending intent — mid-collection state ────────────────────────────────
+    pending_intent: Optional[str] = state.get("pending_intent")
+    collected: Dict[str, Any] = state.get("collected_slots") or {}
+    if pending_intent:
+        lines.append("")
+        lines.append(f"COLLECTING DETAILS FOR: {pending_intent}")
+        lines.append("Already collected (do NOT re-ask for these):")
+        if collected:
+            for k, v in collected.items():
+                label = _SLOT_LABELS.get(k, k)
+                lines.append(f"  ✓ {label}: {v}")
+        missing = _missing_slots(pending_intent, collected)
+        if missing:
+            labels = [_SLOT_LABELS.get(s, s) for s in missing]
+            lines.append(f"Still needed: {', '.join(labels)}")
+            lines.append(
+                f"Ask for the FIRST missing field only: {_SLOT_LABELS.get(missing[0], missing[0])}"
+            )
+        else:
+            lines.append(
+                "ALL required fields are now collected — call the tool immediately."
+            )
+
     # ── Active travel context ────────────────────────────────────────────────
-    # Surfaces whatever the agent already knows from prior turns so the model
-    # never has to re-ask for information it already has.
     lines.append("")
     lines.append("CURRENT SESSION CONTEXT (do not ask the user for these again):")
 
-    # Search results / ranked trains from this session
     trains = state.get("ranked_results") or state.get("search_results") or []
     if trains:
         lines.append(f"- Train search results available: {len(trains)} train(s) found.")
-        for t in trains[:5]:  # cap at 5 to avoid bloating the prompt
-            num  = t.get("trainNumber", "?")
-            name = t.get("trainName", "")
-            dep  = t.get("departure", "")
-            arr  = t.get("arrival", "")
-            dur  = t.get("duration", "")
-            frm  = t.get("fromStation", "")
-            to   = t.get("toStation", "")
+        for t in trains[:5]:
+            num   = t.get("trainNumber", "?")
+            name  = t.get("trainName", "")
+            dep   = t.get("departure", "")
+            arr   = t.get("arrival", "")
+            dur   = t.get("duration", "")
+            frm   = t.get("fromStation", "")
+            to    = t.get("toStation", "")
             avail = t.get("availability", {})
             avail_str = ""
             if isinstance(avail, dict):
@@ -137,21 +217,22 @@ def _build_context(state: Dict[str, Any]) -> str:
                     avail_str = " | NOT AVBL"
             lines.append(f"  • {num} {name} | {frm} {dep}→{to} {arr} ({dur}){avail_str}")
 
-    # Selected / focused train — from explicit state or inferred from search results
-    # when the conversation has narrowed to a single train
     sel = state.get("selected_train")
     if not sel and trains and len(trains) == 1:
         sel = trains[0]
     if sel:
         journey_date = sel.get("journeyDate", "")
-        date_str = f" | journeyDate={journey_date}" if journey_date else " | journeyDate=UNKNOWN (call check_availability first)"
+        date_str = (
+            f" | journeyDate={journey_date}"
+            if journey_date
+            else " | journeyDate=UNKNOWN (call check_availability first)"
+        )
         lines.append(
             f"- Selected train: {sel.get('trainNumber')} {sel.get('trainName', '')} "
             f"({sel.get('fromStation')}→{sel.get('toStation')}{date_str}) — "
             f"use these values directly for book_ticket."
         )
 
-    # Availability checked
     avail = state.get("availability")
     if avail and isinstance(avail, dict):
         status_str = avail.get("status") or ("AVBL" if avail.get("available") else "N/A")
@@ -162,14 +243,11 @@ def _build_context(state: Dict[str, Any]) -> str:
             + (f" ({count} seats)" if count else "")
         )
 
-    # Fares fetched — show all classes stored in persistent_results["fares"],
-    # falling back to the single compat fare field for older state shapes.
     fares_map: Dict[str, Any] = persistent.get("fares") or {}
     single_fare = state.get("fare")
     if not fares_map and single_fare and isinstance(single_fare, dict):
         cls = single_fare.get("travelClass") or "?"
         fares_map = {cls: single_fare}
-
     if fares_map:
         fare_train = ""
         fare_lines = []
@@ -186,15 +264,62 @@ def _build_context(state: Dict[str, Any]) -> str:
             )
             lines.extend(fare_lines)
 
-    # Active booking
     booking = state.get("booking")
     if booking and isinstance(booking, dict):
-        pnr    = booking.get("pnr", "")
+        pnr     = booking.get("pnr", "")
         status_b = booking.get("status", "")
-        train  = booking.get("trainNumber", "")
+        train   = booking.get("trainNumber", "")
         lines.append(f"- Active booking: PNR {pnr} | train {train} | status {status_b}")
 
     return "\n".join(lines)
+
+
+def _extract_collected_slots(
+    tool_name: str,
+    args: Dict[str, Any],
+    state: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Merge the tool args the model just produced with everything already known
+    from state (selected_train, availability, fare, saved passengers) to build
+    the most complete collected_slots possible.
+    """
+    collected: Dict[str, Any] = dict(state.get("collected_slots") or {})
+
+    # Start from what the model gave us
+    for k, v in args.items():
+        if v is not None and v != "":
+            collected[k] = v
+
+    # Fill from selected_train
+    sel = state.get("selected_train") or {}
+    for slot, field in [
+        ("trainNumber",  "trainNumber"),
+        ("fromStation",  "fromStation"),
+        ("toStation",    "toStation"),
+        ("journeyDate",  "journeyDate"),
+    ]:
+        if not collected.get(slot) and sel.get(field):
+            collected[slot] = sel[field]
+
+    # Fill quota default
+    if not collected.get("quota"):
+        collected["quota"] = "GN"
+
+    # Fill passengers from saved list if user referred to them
+    if not collected.get("passengers"):
+        saved = (state.get("persistent_results") or {}).get("get_saved_passengers") or []
+        if len(saved) == 1:
+            # Only one saved passenger — use automatically
+            p = saved[0]
+            collected["passengers"] = [{
+                "name":   p.get("name", ""),
+                "age":    p.get("age", ""),
+                "gender": p.get("gender", ""),
+                "berthPreference": p.get("berthPreference", ""),
+            }]
+
+    return collected
 
 
 def _grounded_pnrs(state: Dict[str, Any]) -> set:
@@ -223,56 +348,36 @@ def _build_messages_for_llm(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Convert the LangGraph message list into the OpenAI messages format.
 
-    Key difference from the old format_messages() helper: we DO include
-    AIMessages that carry tool_calls and the subsequent ToolMessages, because
-    the model needs that context to continue the loop correctly.
-
-    We apply a sliding window (last 30 messages) to keep prompt size bounded,
-    always anchoring the first human message.
+    Applies a sliding window (last 30 messages), always anchoring the first
+    HumanMessage.
 
     IMPORTANT — OpenAI hard rule:
-    Every tool_call_id emitted in an assistant message must have a matching
-    tool-role response in the same history.  When the sliding window trims
-    the tail of a prior turn, an AIMessage with tool_calls can end up without
-    its ToolMessages.  We guard against this in two ways:
-
-    1. After windowing, collect all tool_call_ids that have a ToolMessage
-       present in the window.
-    2. For any AIMessage whose tool_calls are NOT fully covered, strip the
-       tool_calls field (keeping the text content if any) so OpenAI never
-       sees an unmatched call_id.
+    Every tool_call_id in an assistant message must have a matching tool-role
+    response. After windowing, any AIMessage whose ToolMessages were trimmed has
+    its tool_calls field stripped so OpenAI never sees an unmatched call_id.
     """
     raw: List[Any] = state.get("messages", [])
 
-    # Sliding window — keep first HumanMessage + last 30 messages
     _WINDOW = 30
     if len(raw) > _WINDOW:
-        first_human = next(
-            (m for m in raw if isinstance(m, HumanMessage)), None
-        )
+        first_human = next((m for m in raw if isinstance(m, HumanMessage)), None)
         windowed = raw[-_WINDOW:]
         if first_human and first_human not in windowed:
             windowed = [first_human] + windowed
     else:
         windowed = list(raw)
 
-    # Collect all tool_call_ids that have a ToolMessage present in the window
     covered_ids: set = {
         msg.tool_call_id
         for msg in windowed
         if isinstance(msg, ToolMessage)
     }
-
-    # Collect all tool_call_ids that are declared by an AIMessage in the window.
-    # ToolMessages whose parent AIMessage was trimmed must also be dropped —
-    # OpenAI requires the assistant message to precede its tool responses.
     declared_ids: set = {
         c["id"]
         for msg in windowed
         if isinstance(msg, AIMessage)
         for c in (getattr(msg, "tool_calls", None) or [])
     }
-    # Only keep ToolMessages that have their parent AIMessage present
     valid_tool_ids: set = covered_ids & declared_ids
 
     result: List[Dict[str, Any]] = []
@@ -284,13 +389,7 @@ def _build_messages_for_llm(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             entry: Dict[str, Any] = {"role": "assistant", "content": msg.content or ""}
             tc = getattr(msg, "tool_calls", None)
             if tc:
-                # Only include tool_calls whose ToolMessage responses are
-                # also present in the window. If none are covered, emit only
-                # text; if some are covered, include only the covered subset
-                # (the rest were already responded to in an earlier window).
-                covered_calls = [
-                    c for c in tc if c["id"] in valid_tool_ids
-                ]
+                covered_calls = [c for c in tc if c["id"] in valid_tool_ids]
                 if covered_calls:
                     entry["tool_calls"] = [
                         {
@@ -303,13 +402,9 @@ def _build_messages_for_llm(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                         }
                         for c in covered_calls
                     ]
-                # If no covered calls, tool_calls is simply omitted — the
-                # assistant message becomes a plain text entry, which is
-                # valid even if content is empty string.
             result.append(entry)
 
         elif isinstance(msg, ToolMessage):
-            # Drop ToolMessages whose parent AIMessage was trimmed from window
             if msg.tool_call_id in valid_tool_ids:
                 result.append({
                     "role": "tool",
@@ -333,7 +428,6 @@ async def agent_node(
     is_new_turn = prior_loop == 0
     loop_count = prior_loop + 1
 
-    # Hard loop guard
     if loop_count > _MAX_LOOP:
         return {
             "messages": [AIMessage(content=(
@@ -344,16 +438,16 @@ async def agent_node(
             "agent_loop_count": 0,
             "tool_history": [],
             "errors": [],
+            "pending_intent": None,
+            "collected_slots": None,
         }
 
-    # Reflection feedback injection
     feedback = state.get("reflection_feedback") or ""
     feedback_block = (
         f"\n[Note: your previous answer was incomplete — {feedback}. Please fix this.]"
         if feedback else ""
     )
 
-    # Fetch live tool schemas from the registry
     tools: List[Dict[str, Any]] = mcp_registry.get_tool_schemas() if mcp_registry else []
 
     messages = _build_messages_for_llm(state)
@@ -375,12 +469,12 @@ async def agent_node(
     msg = response.choices[0].message
     raw_tool_calls = msg.tool_calls or []
 
-    # Fields reset at the start of each new user turn
     reset_fields: Dict[str, Any] = {"tool_history": [], "errors": []} if is_new_turn else {}
 
-    # ── No tool calls → final answer ────────────────────────────────────────
+    # ── No tool calls → question or final answer ─────────────────────────────
     if not raw_tool_calls:
         reply = _ground_reply(msg.content or "", state)
+
         updates: Dict[str, Any] = {
             "messages": [AIMessage(content=reply)],
             "pending_tool_calls": [],
@@ -388,12 +482,57 @@ async def agent_node(
             "reflection_feedback": "",
             **reset_fields,
         }
-        # Trigger reflection if tools ran this turn and we haven't checked yet
+
+        # Detect if the reply is asking the user for a missing detail.
+        # We preserve pending_intent + collected_slots so the next turn knows
+        # where it left off. If there's no active intent, these stay None.
+        existing_intent: Optional[str] = state.get("pending_intent")
+        existing_slots: Dict[str, Any] = state.get("collected_slots") or {}
+
+        if existing_intent:
+            # Still mid-collection — re-derive collected_slots from current state
+            # so any new information the user just provided is captured.
+            refreshed_slots = _extract_collected_slots(existing_intent, {}, state)
+            updates["pending_intent"]  = existing_intent
+            updates["collected_slots"] = refreshed_slots
+        else:
+            # Detect a new collection starting: look for intent keywords in the
+            # reply that suggest the agent is asking for booking/cancellation info.
+            # We infer from the reply text which tool was being aimed at.
+            reply_lower = reply.lower()
+            inferred_intent: Optional[str] = None
+            if any(w in reply_lower for w in ("book", "booking", "reserve", "ticket")):
+                inferred_intent = "book_ticket"
+            elif any(w in reply_lower for w in ("cancel", "cancellation")):
+                inferred_intent = "cancel_ticket"
+            elif any(w in reply_lower for w in ("availability", "available seats", "check seat")):
+                inferred_intent = "check_availability"
+            elif any(w in reply_lower for w in ("live status", "running status", "train status")):
+                inferred_intent = "get_live_status"
+            elif any(w in reply_lower for w in ("reminder")):
+                inferred_intent = "create_reminder"
+
+            if inferred_intent:
+                # Seed collected_slots with what we already know from state
+                seed_slots = _extract_collected_slots(inferred_intent, {}, state)
+                missing_now = _missing_slots(inferred_intent, seed_slots)
+                if missing_now:
+                    # Genuinely missing something — start tracking
+                    updates["pending_intent"]  = inferred_intent
+                    updates["collected_slots"] = seed_slots
+                else:
+                    updates["pending_intent"]  = None
+                    updates["collected_slots"] = None
+            else:
+                updates["pending_intent"]  = None
+                updates["collected_slots"] = None
+
         if state.get("tool_history") and not state.get("reflection_passed"):
             updates["reflection_required"] = True
+
         return updates
 
-    # ── Tool calls → parse and stage ────────────────────────────────────────
+    # ── Tool calls → parse, collect slots, stage ─────────────────────────────
     pending: List[Dict[str, Any]] = []
     for tc in raw_tool_calls:
         try:
@@ -401,12 +540,11 @@ async def agent_node(
         except json.JSONDecodeError:
             args = {}
         pending.append({
-            "id": tc.id,
+            "id":   tc.id,
             "name": tc.function.name,
             "args": args,
         })
 
-    # Persist the AIMessage with tool_calls so the loop history is coherent
     ai_msg = AIMessage(
         content=msg.content or "",
         tool_calls=[
@@ -415,14 +553,32 @@ async def agent_node(
         ],
     )
 
-    # Early-pin selected_train when the agent targets a specific train.
-    # This ensures the train card collapses to one entry and journeyDate is
-    # available in state even before tool_executor_node runs.
+    # When tool calls fire, the intent is being executed — clear pending_intent.
+    # Also update collected_slots with what the model resolved so future turns
+    # can resume correctly if this tool call only partially satisfies the intent.
+    first_tool = pending[0]["name"]
+    resolved_slots = _extract_collected_slots(
+        first_tool, pending[0]["args"], state
+    )
+    missing = _missing_slots(first_tool, resolved_slots)
+
+    slot_updates: Dict[str, Any] = {
+        # If the model is calling the tool, intent is being fulfilled — clear it.
+        "pending_intent":  None,
+        "collected_slots": None,
+    }
+
+    # Edge case: model emitted a tool call but args are still incomplete
+    # (shouldn't happen after prompt fix, but guard anyway — don't clear intent).
+    if missing and first_tool in _TOOL_REQUIRED_SLOTS:
+        slot_updates["pending_intent"]  = first_tool
+        slot_updates["collected_slots"] = resolved_slots
+
+    # ── Early-pin selected_train when a single train is targeted ─────────────
     early_updates: Dict[str, Any] = {}
     if not state.get("selected_train"):
-        # Find any pending call that unambiguously references one train number
-        focused_num = None
-        focused_date = None
+        focused_num: Optional[str] = None
+        focused_date: Optional[str] = None
         for p in pending:
             args = p.get("args") or {}
             num = args.get("trainNumber") or args.get("train_number")
@@ -432,7 +588,6 @@ async def agent_node(
                     focused_num = str(num)
                     focused_date = dt
                 elif focused_num != str(num):
-                    # Multiple different trains targeted — don't pin yet
                     focused_num = None
                     break
         if focused_num:
@@ -443,14 +598,14 @@ async def agent_node(
             )
             if base:
                 sel: Dict[str, Any] = {
-                    "trainNumber":  focused_num,
-                    "trainName":    base.get("trainName", ""),
-                    "fromStation":  base.get("fromStation", ""),
-                    "toStation":    base.get("toStation", ""),
-                    "departure":    base.get("departure", ""),
-                    "arrival":      base.get("arrival", ""),
-                    "duration":     base.get("duration", ""),
-                    "classes":      base.get("classes", []),
+                    "trainNumber": focused_num,
+                    "trainName":   base.get("trainName", ""),
+                    "fromStation": base.get("fromStation", ""),
+                    "toStation":   base.get("toStation", ""),
+                    "departure":   base.get("departure", ""),
+                    "arrival":     base.get("arrival", ""),
+                    "duration":    base.get("duration", ""),
+                    "classes":     base.get("classes", []),
                 }
                 if focused_date:
                     sel["journeyDate"] = focused_date
@@ -461,5 +616,6 @@ async def agent_node(
         "pending_tool_calls": pending,
         "agent_loop_count": loop_count,
         **reset_fields,
+        **slot_updates,
         **early_updates,
     }
