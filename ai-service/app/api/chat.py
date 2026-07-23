@@ -168,8 +168,6 @@ async def run_agent(
                 initial_state["booking"] = request.booking
             result = await agent_graph.ainvoke(initial_state, config=config)
     except BaseAPIException:
-        # Domain exceptions (RateLimitException, ServiceUnavailableException, etc.)
-        # are handled by the global exception handler in core/handlers.py — let them propagate.
         raise
     except Exception as e:
         app_logger.error("Agent graph error: {error}", error=str(e), exc_info=True)
@@ -177,13 +175,51 @@ async def run_agent(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The agent could not process your request. Please try again.",
         ) from e
-    
+
+    # ── Detect human-approval interrupt ──────────────────────────────────────
+    # ainvoke returns normally when the graph hits interrupt() — it does NOT
+    # raise an exception.  The signal is: pending_tool_calls is non-empty AND
+    # one of them is a destructive tool that requires confirmation.
+    _DESTRUCTIVE = {"book_ticket", "cancel_ticket", "update_booking",
+                    "manage_reminder", "add_saved_passenger", "delete_saved_passenger"}
+    pending_calls = result.get("pending_tool_calls") or []
+    needs_approval = any(p.get("name") in _DESTRUCTIVE for p in pending_calls)
+    if needs_approval and not result.get("confirmed"):
+        # Read the confirmation prompt from the checkpointed interrupt value.
+        # Build it ourselves from the pending call if not already in state.
+        prompt = result.get("confirmation_prompt") or ""
+        if not prompt and pending_calls:
+            from app.graph.tool_meta import build_confirmation_prompt
+            p = pending_calls[0]
+            prompt = build_confirmation_prompt(p["name"], p.get("args") or {})
+        return {
+            "message": prompt,
+            "intent": result.get("intent"),
+            "travel_context": result.get("travel"),
+            "search_results": result.get("ranked_results") or result.get("search_results"),
+            "selected_train": result.get("selected_train"),
+            "availability": result.get("availability"),
+            "fare": result.get("fare"),
+            "booking": result.get("booking"),
+            "confirmation_required": True,
+            "confirmation_prompt": prompt,
+            "interrupted": True,
+            "errors": result.get("errors") or [],
+        }
+
     messages = result.get("messages", [])
     reply = ""
     for msg in reversed(messages):
-        if hasattr(msg, "content") and not isinstance(msg, HumanMessage):
-            reply = str(msg.content)
-            break
+        # Skip HumanMessages and AIMessages that only contain tool_calls with no
+        # visible text (content is None, empty string, or whitespace-only).
+        # These are intermediate "thinking" turns, not the final answer.
+        if isinstance(msg, HumanMessage):
+            continue
+        content = getattr(msg, "content", None)
+        if not content or not str(content).strip():
+            continue
+        reply = str(content).strip()
+        break
 
     if request.user_email and not request.resume:
         await conv_manager.save_turn(

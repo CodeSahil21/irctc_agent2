@@ -42,10 +42,12 @@ def _manage_reminder_destructive(args: Dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 DESTRUCTIVE_TOOLS: Dict[str, Callable[[Dict[str, Any]], bool]] = {
-    "book_ticket":    lambda args: True,
-    "cancel_ticket":  lambda args: True,
-    "update_booking": _update_booking_destructive,
-    "manage_reminder": _manage_reminder_destructive,
+    "book_ticket":         lambda args: True,
+    "cancel_ticket":       lambda args: True,
+    "update_booking":      _update_booking_destructive,
+    "manage_reminder":     _manage_reminder_destructive,
+    "add_saved_passenger": lambda args: True,
+    "delete_saved_passenger": lambda args: True,
 }
 
 
@@ -104,6 +106,21 @@ def build_confirmation_prompt(tool_name: str, args: Dict[str, Any]) -> str:
         return (
             f"I'll delete reminder **{args.get('reminderId', '?')}**. "
             f"Are you sure? (yes / no)"
+        )
+
+    if tool_name == "add_saved_passenger":
+        name   = args.get("name", "?")
+        age    = args.get("age", "?")
+        gender = args.get("gender", "?")
+        return (
+            f"I'll save **{name}** (age {age}, {gender}) to your passenger list. "
+            f"Shall I go ahead? (yes / no)"
+        )
+
+    if tool_name == "delete_saved_passenger":
+        return (
+            f"I'll remove passenger **{args.get('passengerId', args.get('name', '?'))}** "
+            f"from your saved list. This cannot be undone. (yes / no)"
         )
 
     # Generic fallback for any future destructive tool added to the map

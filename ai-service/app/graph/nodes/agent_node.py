@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +26,7 @@ _TOOL_REQUIRED_SLOTS: Dict[str, List[str]] = {
     "get_fare":              ["trainNumber", "journeyDate", "fromStation", "toStation", "travelClass"],
     "get_pnr":               ["pnr"],
     "get_booking":           ["pnr"],
-    "update_booking":        ["pnr"],
+    "update_booking":        ["pnr", "newBoardingStation"],
     "get_live_status":       ["trainNumber", "journeyDate"],
     "get_route":             ["trainNumber"],
     "get_train_schedule":    ["trainNumber"],
@@ -77,6 +78,27 @@ Always resolve them to an explicit YYYY-MM-DD date before calling any tool. \
 NEVER use a date from 2023 or any year other than the current year unless the \
 user explicitly provides a past date.
 
+INTENT GATE — READ THIS BEFORE CALLING ANY TOOL
+You must ONLY call a tool when the user has explicitly requested the corresponding \
+action in their current or recent message. Do NOT infer, anticipate, or pre-emptively \
+call tools the user did not ask for.
+
+STRICT EXAMPLES:
+- User asks "are there trains from Mumbai to Delhi?" → call find_station / \
+recommend_trains. Do NOT call book_ticket or add_saved_passenger.
+- User asks "what is the fare for Rajdhani?" → call get_fare. Do NOT call book_ticket.
+- User asks "check availability" → call check_availability. Do NOT call book_ticket.
+- User asks "book a ticket" or "I want to book" → THEN start the book_ticket flow.
+- User says "I want to go with Golden Temple Mail" or "I'll take Rajdhani" or \
+"let's go with Paschim Express" → THEN start the book_ticket flow for that train.
+- User asks "save this passenger" or "add passenger" → THEN start add_saved_passenger flow.
+- User asks "cancel my ticket" → THEN start the cancel_ticket flow.
+
+If the user has NOT said anything resembling "book", "reserve", "add passenger", \
+"save passenger", "cancel", etc., you MUST NOT call book_ticket, add_saved_passenger, \
+cancel_ticket, or any other write/mutating tool. Calling a mutating tool without an \
+explicit request is a critical error.
+
 SLOT-FILLING PROTOCOL
 When you need to call a tool but one or more required arguments are missing:
 1. Check the CURRENT SESSION CONTEXT below — values already collected are listed \
@@ -92,6 +114,8 @@ it when you're ready." Then stop — do not guess or use a placeholder value.
 A wrong booking is worse than no booking.
 
 BOOKING RULES
+- Only start the book_ticket flow when the user explicitly says they want to book \
+(e.g. "book this", "I want to book", "reserve a seat", "book the Rajdhani").
 - Before calling book_ticket, you MUST have ALL of: trainNumber, journeyDate \
 (YYYY-MM-DD), fromStation, toStation, travelClass, passengers (name/age/gender \
 for each), quota (default GN if not specified). \
@@ -101,6 +125,13 @@ first — the response includes journeyDate. \
 list, use those exact details — do not re-ask. \
 - Do NOT ask "shall I proceed?" before booking — the system handles confirmation \
 separately after you call book_ticket. Just call it.
+
+PASSENGER MANAGEMENT RULES
+- Only call add_saved_passenger when the user explicitly asks to save or add a \
+passenger (e.g. "save this passenger", "add passenger", "add Ryan to my list").
+- Always ask for name, age, and gender before calling add_saved_passenger if any \
+of these are missing. Do not invent or reuse values from a previous booking context \
+unless the user explicitly refers to them.
 
 CORE RULES
 - Use tools to get real data. NEVER invent or guess PNRs, train numbers, fares, \
@@ -322,6 +353,139 @@ def _extract_collected_slots(
     return collected
 
 
+# ---------------------------------------------------------------------------
+# Conversation-history slot extraction
+# ---------------------------------------------------------------------------
+
+# Simple patterns for extracting passenger / travel slot values from plain
+# user text.  These cover the most common "Kevin 22 MALE" style responses
+# without requiring the model to re-run just to parse them.
+
+_GENDER_RE  = re.compile(r"\b(male|female|other|m|f)\b", re.IGNORECASE)
+_AGE_RE     = re.compile(r"\b(\d{1,3})\b")
+_CLASS_RE   = re.compile(r"\b(SL|2S|CC|3E|3A|2A|1A|EC)\b", re.IGNORECASE)
+_DATE_RE    = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def _gender_normalised(raw: str) -> str:
+    raw = raw.strip().upper()
+    if raw in ("M", "MALE"):
+        return "MALE"
+    if raw in ("F", "FEMALE"):
+        return "FEMALE"
+    return "OTHER"
+
+
+def _extract_slots_from_messages(
+    tool_name: str,
+    collected: Dict[str, Any],
+    messages: List[Any],
+) -> Dict[str, Any]:
+    """
+    Scan the last few HumanMessages to fill any still-missing slots for
+    tool_name.  This handles cases like the user replying "Kevin 22 MALE"
+    after being asked for passenger details — the model sees those values
+    in the conversation, but collected_slots may not yet reflect them.
+
+    Only writes slots that are genuinely missing so existing values are
+    never overwritten.
+    """
+    missing = set(_missing_slots(tool_name, collected))
+    if not missing:
+        return collected
+
+    updated = dict(collected)
+
+    # Walk the last 6 messages (3 exchanges) newest-first
+    recent_human: List[str] = []
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            recent_human.append(str(m.content))
+            if len(recent_human) >= 3:
+                break
+
+    # ── add_saved_passenger / passenger slot filling ─────────────────────────
+    if tool_name in ("add_saved_passenger", "book_ticket") and (
+        "name" in missing or "age" in missing or "gender" in missing
+        or "passengers" in missing
+    ):
+        for text in recent_human:
+            words = text.strip().split()
+
+            # Gender
+            if "gender" in missing or "passengers" in missing:
+                gm = _GENDER_RE.search(text)
+                if gm:
+                    updated.setdefault("_parsed_gender", _gender_normalised(gm.group(1)))
+
+            # Age — first standalone number in range [1,120]
+            if "age" in missing or "passengers" in missing:
+                for match in _AGE_RE.finditer(text):
+                    val = int(match.group(1))
+                    if 1 <= val <= 120:
+                        updated.setdefault("_parsed_age", val)
+                        break
+
+            # Name — first capitalised token that isn't a keyword
+            _SKIP = {"MALE", "FEMALE", "OTHER", "SL", "3A", "2A", "1A", "EC",
+                     "3E", "2S", "CC", "GN", "YES", "NO", "OK"}
+            if "name" in missing or "passengers" in missing:
+                for w in words:
+                    clean = w.strip(".,!?").upper()
+                    if (
+                        clean not in _SKIP
+                        and not clean.isdigit()
+                        and len(clean) >= 2
+                        and w[0].isupper()
+                    ):
+                        updated.setdefault("_parsed_name", w.strip(".,!?"))
+                        break
+
+            # Stop scanning if we have everything
+            if all(k in updated for k in ("_parsed_name", "_parsed_age", "_parsed_gender")):
+                break
+
+        # Promote parsed values into proper slots
+        if tool_name == "add_saved_passenger":
+            if "name" in missing and "_parsed_name" in updated:
+                updated["name"] = updated.pop("_parsed_name")
+            if "age" in missing and "_parsed_age" in updated:
+                updated["age"] = updated.pop("_parsed_age")
+            if "gender" in missing and "_parsed_gender" in updated:
+                updated["gender"] = updated.pop("_parsed_gender")
+        elif tool_name == "book_ticket" and "passengers" in missing:
+            pname   = updated.pop("_parsed_name", None)
+            page    = updated.pop("_parsed_age", None)
+            pgender = updated.pop("_parsed_gender", None)
+            if pname and page and pgender:
+                updated["passengers"] = [{
+                    "name":   pname,
+                    "age":    page,
+                    "gender": pgender,
+                }]
+        # Clean up any leftover _parsed_* keys
+        for k in ("_parsed_name", "_parsed_age", "_parsed_gender"):
+            updated.pop(k, None)
+
+    # ── Travel class ─────────────────────────────────────────────────────────
+    if "travelClass" in missing:
+        for text in recent_human:
+            cm = _CLASS_RE.search(text)
+            if cm:
+                updated["travelClass"] = cm.group(1).upper()
+                break
+
+    # ── Journey date ─────────────────────────────────────────────────────────
+    if "journeyDate" in missing:
+        for text in recent_human:
+            dm = _DATE_RE.search(text)
+            if dm:
+                updated["journeyDate"] = dm.group(1)
+                break
+
+    return updated
+
+
 def _grounded_pnrs(state: Dict[str, Any]) -> set:
     """Collect every PNR that appears verbatim in tool results this session."""
     blob = json.dumps(
@@ -448,6 +612,21 @@ async def agent_node(
         if feedback else ""
     )
 
+    # ── Pre-enrich collected_slots from conversation history ─────────────────
+    # Do this BEFORE building the context block so the system prompt shows the
+    # LLM an accurate picture of what's already been collected.  Without this,
+    # the context says "still need name/age/gender" even when the user just
+    # provided them in the previous message, causing the LLM to ask again.
+    active_intent_pre: Optional[str] = state.get("pending_intent")
+    if active_intent_pre:
+        pre_slots = _extract_collected_slots(active_intent_pre, {}, state)
+        pre_slots = _extract_slots_from_messages(
+            active_intent_pre, pre_slots, state.get("messages", [])
+        )
+        # Temporarily patch state view for context building only — we do NOT
+        # write back to state here; that happens in the no-tool-calls branch.
+        state = {**state, "collected_slots": pre_slots}
+
     tools: List[Dict[str, Any]] = mcp_registry.get_tool_schemas() if mcp_registry else []
 
     messages = _build_messages_for_llm(state)
@@ -471,6 +650,69 @@ async def agent_node(
 
     reset_fields: Dict[str, Any] = {"tool_history": [], "errors": []} if is_new_turn else {}
 
+    # ── Intent guardrail — veto mutating tool calls the user didn't request ──
+    # On the very first agent loop of a new turn (loop_count == 1) we have the
+    # latest user message at hand and can check whether the user actually asked
+    # for a write action.  If the model hallucinated a call to book_ticket,
+    # add_saved_passenger, cancel_ticket, etc. without an explicit user trigger,
+    # we strip those calls and let the model produce a text reply instead.
+    # This is a defense-in-depth layer on top of the system prompt rules.
+    #
+    # EXCEPTION: if state already has an active pending_intent for this tool,
+    # the user is mid-collection and their reply is an answer to a question —
+    # not a new unprompted request.  Never veto those.
+    if raw_tool_calls and loop_count == 1:
+        latest_human = ""
+        for m in reversed(state.get("messages", [])):
+            if isinstance(m, HumanMessage):
+                latest_human = str(m.content).lower()
+                break
+
+        active_intent: Optional[str] = state.get("pending_intent")
+
+        _WRITE_TOOLS = {
+            "book_ticket", "cancel_ticket",
+            "add_saved_passenger", "delete_saved_passenger",
+            "update_booking",
+        }
+        _BOOKING_TRIGGERS   = {
+            "book", "reserve", "buy ticket", "purchase ticket", "i want to book",
+            "i want to go with", "i want to travel", "i'll take", "i will take",
+            "let me book", "book it", "let's go with", "lets go with",
+            "i'll go with", "i will go with", "get me a ticket", "get a ticket",
+            "i want this train", "book this", "book the", "reserve the",
+            "take this", "i want to reserve",
+        }
+        _PASSENGER_TRIGGERS = {"add passenger", "save passenger", "add a passenger",
+                               "save a passenger", "new passenger", "add ryan",
+                               "save ryan", "add to my list", "save to my list"}
+        _CANCEL_TRIGGERS    = {"cancel", "cancellation"}
+
+        def _user_requested_write(tool_name: str) -> bool:
+            """Return True if the latest user message contains an intent trigger for this tool,
+            OR if the user is already mid-collection for this tool."""
+            # Mid-collection: the agent already asked the user for details — never block.
+            if active_intent == tool_name:
+                return True
+            if tool_name == "book_ticket":
+                return any(t in latest_human for t in _BOOKING_TRIGGERS)
+            if tool_name in ("add_saved_passenger", "delete_saved_passenger"):
+                return any(t in latest_human for t in _PASSENGER_TRIGGERS)
+            if tool_name == "cancel_ticket":
+                return any(t in latest_human for t in _CANCEL_TRIGGERS)
+            if tool_name == "update_booking":
+                return any(t in latest_human for t in {"update", "change", "modify", "boarding point"})
+            return True  # read-only / search tools are always allowed
+
+        filtered_calls = [
+            tc for tc in raw_tool_calls
+            if (tc.function.name not in _WRITE_TOOLS)
+               or _user_requested_write(tc.function.name)
+        ]
+
+        if len(filtered_calls) < len(raw_tool_calls):
+            raw_tool_calls = filtered_calls
+
     # ── No tool calls → question or final answer ─────────────────────────────
     if not raw_tool_calls:
         reply = _ground_reply(msg.content or "", state)
@@ -483,22 +725,59 @@ async def agent_node(
             **reset_fields,
         }
 
-        # Detect if the reply is asking the user for a missing detail.
-        # We preserve pending_intent + collected_slots so the next turn knows
-        # where it left off. If there's no active intent, these stay None.
+        # ── Slot-filling state management ──────────────────────────────────────
+        # When the agent asks for a missing detail it produces a text reply
+        # (no tool call).  We must keep pending_intent alive across that turn
+        # so the *next* turn — where the user answers — still knows what it's
+        # collecting toward.
+        #
+        # KEY DESIGN: when we detect that all slots are now filled (from the
+        # conversation history), we synthesize the tool call directly rather
+        # than waiting for the LLM to be re-invoked. This avoids an extra
+        # round-trip and ensures the tool actually gets called.
         existing_intent: Optional[str] = state.get("pending_intent")
-        existing_slots: Dict[str, Any] = state.get("collected_slots") or {}
 
         if existing_intent:
-            # Still mid-collection — re-derive collected_slots from current state
-            # so any new information the user just provided is captured.
+            # Re-derive collected_slots and try to pick up values the user
+            # just provided (e.g. "Kevin 22 MALE" after being asked for name).
             refreshed_slots = _extract_collected_slots(existing_intent, {}, state)
-            updates["pending_intent"]  = existing_intent
-            updates["collected_slots"] = refreshed_slots
+            refreshed_slots = _extract_slots_from_messages(
+                existing_intent, refreshed_slots, state.get("messages", [])
+            )
+            missing_now = _missing_slots(existing_intent, refreshed_slots)
+            if missing_now:
+                # Still waiting for more info — keep intent alive.
+                updates["pending_intent"]  = existing_intent
+                updates["collected_slots"] = refreshed_slots
+            else:
+                # All slots filled — synthesize the pending tool call so the
+                # graph routes to tool_executor_node (or human_approval_node)
+                # on this same turn, without needing another LLM round-trip.
+                synthetic_id   = f"synth_{uuid.uuid4().hex[:12]}"
+                synthetic_call = {
+                    "id":   synthetic_id,
+                    "name": existing_intent,
+                    "args": refreshed_slots,
+                }
+                ai_tool_msg = AIMessage(
+                    content=reply,
+                    tool_calls=[{
+                        "id":   synthetic_id,
+                        "name": existing_intent,
+                        "args": refreshed_slots,
+                    }],
+                )
+                return {
+                    **updates,
+                    "messages":          [ai_tool_msg],
+                    "pending_tool_calls": [synthetic_call],
+                    "agent_loop_count":   loop_count,
+                    "pending_intent":     None,
+                    "collected_slots":    None,
+                }
         else:
-            # Detect a new collection starting: look for intent keywords in the
-            # reply that suggest the agent is asking for booking/cancellation info.
-            # We infer from the reply text which tool was being aimed at.
+            # No active intent — check whether this reply is starting a new
+            # collection (agent asked for booking/cancellation details).
             reply_lower = reply.lower()
             inferred_intent: Optional[str] = None
             if any(w in reply_lower for w in ("book", "booking", "reserve", "ticket")):
@@ -509,15 +788,18 @@ async def agent_node(
                 inferred_intent = "check_availability"
             elif any(w in reply_lower for w in ("live status", "running status", "train status")):
                 inferred_intent = "get_live_status"
-            elif any(w in reply_lower for w in ("reminder")):
+            elif any(w in reply_lower for w in ("reminder",)):
                 inferred_intent = "create_reminder"
+            elif any(w in reply_lower for w in ("save", "add", "passenger")):
+                inferred_intent = "add_saved_passenger"
 
             if inferred_intent:
-                # Seed collected_slots with what we already know from state
                 seed_slots = _extract_collected_slots(inferred_intent, {}, state)
+                seed_slots  = _extract_slots_from_messages(
+                    inferred_intent, seed_slots, state.get("messages", [])
+                )
                 missing_now = _missing_slots(inferred_intent, seed_slots)
                 if missing_now:
-                    # Genuinely missing something — start tracking
                     updates["pending_intent"]  = inferred_intent
                     updates["collected_slots"] = seed_slots
                 else:
@@ -573,6 +855,22 @@ async def agent_node(
     if missing and first_tool in _TOOL_REQUIRED_SLOTS:
         slot_updates["pending_intent"]  = first_tool
         slot_updates["collected_slots"] = resolved_slots
+
+    # If an active booking/passenger intent exists but the tool being called is
+    # a different (read-only) tool (e.g. check_availability fired mid-booking,
+    # or get_saved_passengers fired mid-add-passenger), do NOT wipe pending_intent.
+    # The booking/passenger flow must survive intermediate read-only tool calls.
+    _WRITE_INTENTS = {"book_ticket", "cancel_ticket", "add_saved_passenger",
+                      "delete_saved_passenger", "update_booking", "manage_reminder"}
+    existing_pi = state.get("pending_intent")
+    if existing_pi in _WRITE_INTENTS and first_tool != existing_pi:
+        # Preserve the pending intent and merge slot data from conversation
+        surviving_slots = _extract_collected_slots(existing_pi, {}, state)
+        surviving_slots = _extract_slots_from_messages(
+            existing_pi, surviving_slots, state.get("messages", [])
+        )
+        slot_updates["pending_intent"]  = existing_pi
+        slot_updates["collected_slots"] = surviving_slots
 
     # ── Early-pin selected_train when a single train is targeted ─────────────
     early_updates: Dict[str, Any] = {}
