@@ -30,9 +30,22 @@ from langsmith import traceable
 
 from app.auth.jwt import extract_user_from_token
 from app.config.settings import get_settings
+from app.core.exceptions import BaseAPIException
 from app.websocket import events
 from app.websocket.connections import create_session, get_session, remove_session
 from app.telemetry.logging import app_logger
+
+
+def _safe_error_message(exc: Exception) -> str:
+    """
+    Convert any exception to a safe user-facing string.
+    Domain exceptions (BaseAPIException) expose their pre-sanitized message.
+    Raw SDK/provider exceptions are replaced with a generic message so that
+    API keys, account details, or internal stack info never reach the client.
+    """
+    if isinstance(exc, BaseAPIException):
+        return exc.message
+    return "Something went wrong. Please try again."
 
 # Shared AsyncServer — imported by main.py to mount
 sio = socketio.AsyncServer(
@@ -179,7 +192,7 @@ def _make_manager(agent_graph, conv_manager):
 
         except Exception as e:
             app_logger.error("Socket query error: {e}", e=str(e), exc_info=True)
-            await sio.emit(events.MESSAGE_ERROR, {"id": msg_id, "error": str(e)}, to=sid)
+            await sio.emit(events.MESSAGE_ERROR, {"id": msg_id, "error": _safe_error_message(e)}, to=sid)
             session.pending_user_message = None
             session.pending_message_id = None
         finally:
@@ -236,7 +249,7 @@ def _make_manager(agent_graph, conv_manager):
 
         except Exception as e:
             app_logger.error("Socket resume error: {e}", e=str(e), exc_info=True)
-            await sio.emit(events.MESSAGE_ERROR, {"id": msg_id, "error": str(e)}, to=sid)
+            await sio.emit(events.MESSAGE_ERROR, {"id": msg_id, "error": _safe_error_message(e)}, to=sid)
         finally:
             await sio.emit(events.AGENT_TYPING, {"isTyping": False}, to=sid)
 

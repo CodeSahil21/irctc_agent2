@@ -90,7 +90,14 @@ class ClaudeService:
 
         except anthropic.BadRequestError as e:
             app_logger.error("Claude BadRequestError: {error}", error=str(e))
-            raise ValidationException(message=str(e.message)) from e
+            raw = str(getattr(e, "message", str(e)))
+            # Billing / credit-balance errors come back as 400 BadRequestError.
+            # Never surface raw API messages (they contain account info) to the caller.
+            if "credit balance" in raw.lower() or "billing" in raw.lower():
+                raise ServiceUnavailableException(
+                    message="The AI service is temporarily unavailable. Please try again later."
+                ) from e
+            raise ValidationException(message="The request could not be processed. Please try again.") from e
         except anthropic.AuthenticationError as e:
             app_logger.error("Claude AuthenticationError: {error}", error=str(e))
             raise AuthenticationException() from e
@@ -102,7 +109,7 @@ class ClaudeService:
             raise ServiceUnavailableException() from e
         except anthropic.APIError as e:
             app_logger.error("Claude Provider APIError: {error}", error=str(e))
-            raise ModelProviderException(message=str(e.message)) from e
+            raise ModelProviderException(message="The AI provider returned an error. Please try again.") from e
         except Exception as e:
             app_logger.error("Unexpected error in ClaudeService: {error}", error=str(e), exc_info=True)
             raise ModelProviderException(message="An unexpected error occurred while calling Claude.") from e
@@ -153,7 +160,12 @@ class ClaudeService:
 
         except anthropic.BadRequestError as e:
             app_logger.error("Claude Stream BadRequestError: {error}", error=str(e))
-            raise ValidationException(message=str(e.message)) from e
+            raw = str(getattr(e, "message", str(e)))
+            if "credit balance" in raw.lower() or "billing" in raw.lower():
+                raise ServiceUnavailableException(
+                    message="The AI service is temporarily unavailable. Please try again later."
+                ) from e
+            raise ValidationException(message="The request could not be processed. Please try again.") from e
         except anthropic.AuthenticationError as e:
             app_logger.error("Claude Stream AuthenticationError: {error}", error=str(e))
             raise AuthenticationException() from e
@@ -165,7 +177,7 @@ class ClaudeService:
             raise ServiceUnavailableException() from e
         except anthropic.APIError as e:
             app_logger.error("Claude Stream APIError: {error}", error=str(e))
-            raise ModelProviderException(message=str(e.message)) from e
+            raise ModelProviderException(message="The AI provider returned an error. Please try again.") from e
 
     async def close(self) -> None:
         """Gracefully closes underlying client HTTP connection pools."""

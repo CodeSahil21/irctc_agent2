@@ -2,6 +2,8 @@
 
 FastAPI + LangGraph orchestration layer for the IRCTC AI assistant. This service owns the AI runtime: intent classification, slot filling, MCP tool planning and execution, train ranking, human approval interrupts, reflection, conversation persistence, and Socket.IO streaming.
 
+> **Status:** All modules verified and fully synced. Error handling hardened — no raw API errors leak to clients.
+
 ---
 
 ## Mental model
@@ -102,6 +104,7 @@ flowchart TD
 | From | Condition | To |
 |---|---|---|
 | `intent_node` | intent == `"general_question"` | `response_node` |
+| `intent_node` | intent in direct-exec set¹ | `tool_executor_node` |
 | `intent_node` | all other intents | `slot_filler_node` |
 | `slot_filler_node` | `missing_slots` not empty | `response_node` |
 | `slot_filler_node` | `missing_slots` empty | `tool_planner_node` |
@@ -119,6 +122,8 @@ flowchart TD
 | `reflection_node` | `reflection_passed` | `response_node` |
 | `reflection_node` | failed + `reflection_retries < 1` | `tool_planner_node` |
 | `reflection_node` | failed + `reflection_retries >= 1` | `response_node` |
+
+¹ **Direct-exec intents** bypass `slot_filler_node` and `tool_planner_node` entirely: `get_saved_passengers`, `get_booking_history`, `get_reminders`, `list_classes`, `list_quotas`. These require no user input — `intent_node` pre-populates `tool_plan = [intent]` and routes straight to `tool_executor_node`.
 
 
 ---
@@ -140,6 +145,7 @@ After classification it:
 3. Resolves `selected_passenger_names` against `saved_passengers` in state
 4. Merges `user_preferences` into travel context (preferred class, quota)
 5. Resets all per-turn working state via `reset_turn_state()`
+6. For **direct-exec intents** (`get_saved_passengers`, `get_booking_history`, `get_reminders`, `list_classes`, `list_quotas`) — pre-populates `tool_plan = [intent]`, sets `tool_plan_args = [{}]`, and routes straight to `tool_executor_node`, bypassing slot filler and tool planner entirely
 
 **Supported intents:**
 
@@ -449,6 +455,42 @@ Two functions:
 
 ---
 
+## Error handling
+
+All errors are sanitised before reaching any client. Raw API messages, stack traces, and account information never appear in HTTP responses or Socket.IO events.
+
+### Exception hierarchy (`app/core/exceptions.py`)
+
+| Exception | HTTP status | Code | When raised |
+|---|---|---|---|
+| `ValidationException` | 400 | `VALIDATION_ERROR` | Malformed request to Claude (non-billing) |
+| `AuthenticationException` | 401 | `AUTHENTICATION_ERROR` | Anthropic API key invalid |
+| `RateLimitException` | 429 | `RATE_LIMIT_EXCEEDED` | Anthropic rate limit hit |
+| `ModelProviderException` | 502 | `MODEL_PROVIDER_ERROR` | Generic Anthropic API error |
+| `ServiceUnavailableException` | 503 | `SERVICE_UNAVAILABLE` | Connection error, timeout, or **credit balance too low** |
+| `NotFoundException` | 404 | `NOT_FOUND` | Resource not found |
+
+### Credit / billing errors
+Anthropic returns a 400 `BadRequestError` when the account has insufficient credits. `ClaudeService` detects this by checking for `"credit balance"` or `"billing"` in the error message and raises `ServiceUnavailableException` with the message `"The AI service is temporarily unavailable. Please try again later."` — the raw Anthropic error string is never forwarded.
+
+### Error path by transport
+
+**HTTP (`/agent`, `/chat`, `/chat/stream`):**
+- `BaseAPIException` subclasses propagate to `core/handlers.py` which returns a structured `ErrorResponse` JSON body
+- All other unhandled exceptions in `/agent` are caught and re-raised as `503 HTTPException` with a generic safe message
+- SSE stream errors emit `data: {"error": "<safe message>"}` and close the stream
+
+**Socket.IO:**
+- `on_query_send` and `on_resume` catch all exceptions and emit `message:error {id, error}` using `_safe_error_message(exc)`: returns `exc.message` for domain exceptions, `"Something went wrong. Please try again."` for everything else
+
+### Global FastAPI handler (`app/core/handlers.py`)
+Three handlers registered at startup:
+- `BaseAPIException` → structured `ErrorResponse` JSON at the exception's own status code
+- `RequestValidationError` → 422 with Pydantic error details
+- `Exception` → 500 with generic message (never exposes traceback)
+
+---
+
 ## Request lifecycle
 
 ### Socket.IO path (primary)
@@ -640,7 +682,7 @@ All settings in `app/config/settings.py` via `pydantic-settings` (reads `.env`).
 | Variable | Required | Default | Notes |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | ✅ | — | Must start with `sk-ant` |
-| `ANTHROPIC_DEFAULT_MODEL` | | `claude-haiku-4-5` | |
+| `ANTHROPIC_DEFAULT_MODEL` | | `claude-haiku-4-5` | Model used for all Claude calls unless overridden per-request |
 | `APP_NAME` | | `ai-service` | |
 | `APP_ENV` | | `development` | Set to `production` for JSON logging + hidden docs |
 | `DEBUG` | | `false` | Enables uvicorn hot-reload |
@@ -688,5 +730,7 @@ The service requires MongoDB and the IRCTC MCP server to be reachable. MCP tool 
 - `app/graph/builder.py` — adding a new node requires: adding to `StateGraph`, adding a conditional edge, and exporting from `app/graph/nodes/__init__.py`.
 - `app/graph/tool_preconditions.py` — adding a new MCP tool: add a `ToolPrecondition` entry here; slot filler and executor will pick it up automatically.
 - Reflection is intentionally capped at 1 retry (`reflection_retries >= 1` → always route to `response_node`). To increase it, change the cap in both `tool_planner_node` and `edges.py`.
-- The checkpointer uses sync pymongo. If you see checkpoint-related blocking, check thread pool saturation under high concurrency.
+- The checkpointer uses sync pymongo (`pymongo>=4.7.0` is a direct dependency in `pyproject.toml`). LangGraph's async interface offloads blocking pymongo calls to a thread executor. If you see checkpoint-related blocking, check thread pool saturation under high concurrency.
 - LangSmith tracing wraps the Anthropic client via `langsmith.wrappers.wrap_anthropic` at startup. All Claude calls appear as child spans under the graph trace automatically.
+- **Error safety:** `ClaudeService` maps all Anthropic SDK exceptions to typed domain exceptions before they leave the service layer. Never add `str(e.message)` or raw exception strings to user-facing responses — use the `BaseAPIException` hierarchy or the `_safe_error_message()` / `_safe_stream_error()` helpers in the transport layer.
+- `app/graph/nodes/planner_node.py` is a backward-compat shim re-exporting `intent_node` — it is not used internally and exists only to avoid breaking external imports.

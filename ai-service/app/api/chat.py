@@ -6,9 +6,17 @@ from langsmith import traceable
 from langgraph.types import Command
 
 from app.api.dependencies import get_agent_graph, get_chat_service, get_conversation_manager
+from app.core.exceptions import BaseAPIException
 from app.schemas.chat import AgentRequest, ChatRequest, ChatResponse
 from app.services.chat import ChatService
 from app.telemetry.logging import app_logger
+
+
+def _safe_stream_error(exc: Exception) -> str:
+    """Return a safe user-facing error string for SSE payloads."""
+    if isinstance(exc, BaseAPIException):
+        return exc.message
+    return "Something went wrong. Please try again."
 
 router = APIRouter()
 
@@ -89,7 +97,7 @@ async def stream_chat_completion(
 
         except Exception as e:
             app_logger.error("Error during streaming execution: {error}", error=str(e), exc_info=True)
-            error_payload = json.dumps({"error": str(e)})
+            error_payload = json.dumps({"error": _safe_stream_error(e)})
             yield f"data: {error_payload}\n\n"
 
     return StreamingResponse(
@@ -147,9 +155,16 @@ async def run_agent(
                 "booking": request.booking,
             }
             result = await agent_graph.ainvoke(initial_state, config=config)
+    except BaseAPIException:
+        # Domain exceptions (RateLimitException, ServiceUnavailableException, etc.)
+        # are handled by the global exception handler in core/handlers.py — let them propagate.
+        raise
     except Exception as e:
         app_logger.error("Agent graph error: {error}", error=str(e), exc_info=True)
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The agent could not process your request. Please try again.",
+        ) from e
     
     messages = result.get("messages", [])
     reply = ""
