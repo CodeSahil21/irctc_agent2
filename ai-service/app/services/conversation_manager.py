@@ -152,22 +152,25 @@ class ConversationManager:
                 )
 
             metrics = result.get("execution_metrics") or {}
+            # tool_history entries now carry {id, tool, args, result, status, latency_ms}
+            tool_history_raw = result.get("tool_history") or []
             await save_execution_log(
                 self._db,
                 ExecutionLogDoc(
                     conversation_id=conversation_id,
                     turn=result.get("turn_count") or 0,
                     intent=intent,
-                    user_goal=result.get("user_goal"),
-                    tool_history=[dict(t) for t in (result.get("tool_history") or [])],
+                    user_goal=None,  # no longer tracked in state; intent covers the goal
+                    tool_history=[dict(t) for t in tool_history_raw],
                     errors=result.get("errors") or [],
                     turn_start_time=metrics.get("turn_start_time"),
                     total_latency_ms=metrics.get("total_latency_ms"),
                     llm_calls=metrics.get("llm_calls"),
-                    tools_called=metrics.get("tools_called"),
+                    tools_called=len([t for t in tool_history_raw if t.get("status") == "success"]),
                 ),
             )
 
+            # Use agent_loop_count as a turn-relative proxy; fall back to 0
             turn_count = result.get("turn_count") or 0
             if turn_count > 0 and turn_count % _SUMMARIZE_EVERY == 0:
                 await self.summarize(conversation_id)

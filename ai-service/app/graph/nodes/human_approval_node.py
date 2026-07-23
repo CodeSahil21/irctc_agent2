@@ -1,82 +1,76 @@
 # graph/nodes/human_approval_node.py
-from typing import Any, Dict
+"""
+human_approval_node — interrupts graph execution to ask the user to confirm
+a destructive action (booking, cancellation, etc.).
 
+LangGraph's interrupt() suspends the graph and surfaces the prompt to the
+caller via the interrupt snapshot.  The graph resumes when the caller sends
+a Command(resume=<value>).
+
+Resume value:
+  bool  → used directly as confirmed
+  str   → normalised against an affirmative word list
+"""
+import json
+from typing import Any, Dict, List
+
+from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
 
-from app.graph.state import TravelState
-from app.telemetry.logging import app_logger
+from app.graph.tool_meta import build_confirmation_prompt, is_destructive
 
 
-def _build_confirmation_prompt(state: TravelState) -> str:
-    """
-    Build a natural conversational confirmation message — not a form.
-    The agent asks as a human travel agent would, summarising what it's about to do
-    and asking for a simple yes/no.
-    """
-    intent = state.get("intent", "")
-    travel = state.get("travel") or {}
-    fare = state.get("fare") or {}
-    booking = state.get("booking") or {}
-    passengers = travel.get("selected_passengers") or []
+def human_approval_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    pending: List[Dict[str, Any]] = state.get("pending_tool_calls") or []
 
-    if intent == "book_ticket":
-        train = f"{travel.get('train_number', '?')} {travel.get('train_name', '')}".strip()
-        route = f"{travel.get('from_station', '?')} → {travel.get('to_station', '?')}"
-        date = travel.get("date", "?")
-        cls = travel.get("travel_class", "?")
-        quota = travel.get("quota", "GN")
-        fare_str = f"₹{fare.get('amount', '?')}" if fare else "fare TBD"
+    # Build a combined prompt for all destructive calls in this batch
+    prompts = [
+        build_confirmation_prompt(p["name"], p["args"])
+        for p in pending
+        if is_destructive(p["name"], p["args"])
+    ]
+    if len(prompts) > 1:
+        prompt = "\n\n".join(prompts)
+    elif prompts:
+        prompt = prompts[0]
+    else:
+        prompt = "Shall I proceed? (yes / no)"
 
-        pax_str = ""
-        if passengers:
-            names = ", ".join(p.get("name", "?") for p in passengers)
-            pax_str = f" for {names}"
-
-        return (
-            f"Just to confirm — I'll book **{train}** on **{date}** "
-            f"({route}), **{cls}** class, {quota} quota, {fare_str}{pax_str}. "
-            f"Shall I go ahead? (yes / no)"
-        )
-
-    if intent == "cancel_ticket":
-        pnr = travel.get("pnr") or booking.get("pnr", "?")
-        return (
-            f"Are you sure you want to cancel the booking with PNR **{pnr}**? "
-            f"This cannot be undone. (yes / no)"
-        )
-
-    if intent == "update_boarding_point":
-        pnr = travel.get("pnr", "?")
-        return (
-            f"I'll update the boarding point for PNR **{pnr}**. "
-            f"Shall I proceed? (yes / no)"
-        )
-
-    if intent == "delete_reminder":
-        return "I'll delete that reminder. Are you sure? (yes / no)"
-
-    if intent == "update_booking_status":
-        return "I'll update the booking status. Shall I proceed? (yes / no)"
-
-    return f"I'm about to perform: **{intent.replace('_', ' ')}**. Shall I proceed? (yes / no)"
-
-
-def human_approval_node(state: TravelState) -> Dict[str, Any]:
-    prompt = _build_confirmation_prompt(state)
-    app_logger.info("Human approval required | intent={intent}", intent=state.get("intent"))
-
-    # LangGraph interrupt — pauses graph, surfaces prompt to caller.
-    # Resume value: bool (from socket client) or "yes"/"no" string (from HTTP client).
+    # Suspend here — caller receives {"confirmation_prompt": prompt}
     user_response = interrupt({"confirmation_prompt": prompt})
 
+    # Normalise the resume value
     if isinstance(user_response, bool):
         confirmed = user_response
     else:
-        confirmed = str(user_response).strip().lower() in ("yes", "y", "confirm", "ok", "proceed", "true", "sure", "go ahead", "yep", "yeah")
+        confirmed = str(user_response).strip().lower() in (
+            "yes", "y", "confirm", "ok", "proceed", "true",
+            "sure", "go ahead", "yep", "yeah",
+        )
 
-    app_logger.info("Human approval response | confirmed={confirmed}", confirmed=confirmed)
+    if confirmed:
+        return {
+            "confirmed": True,
+            "confirmation_prompt": prompt,
+            "confirmation_required": True,
+        }
 
+    # User declined — inject cancelled ToolMessages so the model understands
+    # what happened and can relay it in plain language.
+    cancelled_msgs = [
+        ToolMessage(
+            content=json.dumps({
+                "status": "cancelled",
+                "message": "User did not confirm this action.",
+            }),
+            tool_call_id=p["id"],
+        )
+        for p in pending
+    ]
     return {
-        "confirmed": confirmed,
+        "confirmed": False,
         "confirmation_prompt": prompt,
+        "confirmation_required": True,
+        "pending_tool_calls": [],
+        "messages": cancelled_msgs,
     }

@@ -1,78 +1,77 @@
-from app.graph.state import TravelState
+# graph/edges.py
+"""
+Routing functions for the new agent-loop graph.
 
-_NO_TOOL_INTENTS = {"general_question"}
+Graph shape:
+    START → agent_node
+              │ has pending tool calls + any destructive?
+              ├─► human_approval_node
+              │         │ confirmed?
+              │         ├─► tool_executor_node → agent_node  (loop)
+              │         └─► agent_node          (tell user it was cancelled)
+              │ has pending tool calls, none destructive?
+              ├─► tool_executor_node → agent_node  (loop)
+              │ no tool calls + reflection needed?
+              ├─► reflection_node
+              │         │ passed / retries exhausted?
+              │         ├─► END
+              │         └─► agent_node  (one retry with feedback)
+              └─► END   (plain-text final answer)
+"""
+from typing import Any, Dict
 
-# These intents have zero required user inputs and fixed empty args.
-# Skip slot_filler + tool_planner entirely — go straight to executor.
-_DIRECT_EXEC_INTENTS = {
-    "get_saved_passengers",
-    "get_booking_history",
-    "get_reminders",
-    "list_classes",
-    "list_quotas",
-}
-
-_RANKING_INTENTS = {"search_trains", "recommend_trains"}
-
-
-def route_after_intent(state: TravelState) -> str:
-    intent = state.get("intent", "general_question")
-    if intent in _NO_TOOL_INTENTS:
-        return "response_node"
-    if intent in _DIRECT_EXEC_INTENTS:
-        return "tool_executor_node"
-    return "slot_filler_node"
-
-
-def route_after_slot_filler(state: TravelState) -> str:
-    missing = state.get("missing_slots") or []
-    if missing:
-        return "response_node"
-    return "tool_planner_node"
+from app.graph.tool_meta import is_destructive
 
 
-def route_after_tool_planner(state: TravelState) -> str:
-    tool_plan = state.get("tool_plan") or []
-    if not tool_plan:
-        return "response_node"
-    if state.get("confirmation_required"):
-        return "human_approval_node"
-    return "tool_executor_node"
+def route_after_agent(state: Dict[str, Any]) -> str:
+    """
+    Called after every agent_node invocation.
 
+    Priority:
+      1. Pending tool calls + at least one is destructive → human_approval_node
+      2. Pending tool calls, none destructive              → tool_executor_node
+      3. No pending calls + reflection needed              → reflection_node
+      4. No pending calls                                  → END
+    """
+    pending = state.get("pending_tool_calls") or []
 
-def route_after_human_approval(state: TravelState) -> str:
-    if state.get("confirmed"):
-        return "tool_executor_node"
-    return "response_node"
-
-
-def route_after_tool_executor(state: TravelState) -> str:
-    tool_plan = state.get("tool_plan") or []
-    current_index = state.get("current_tool_index") or 0
-    retries = state.get("retries") or 0
-
-    if retries > 0 and current_index < len(tool_plan):
-        return "tool_executor_node"
-    if current_index < len(tool_plan):
+    if pending:
+        if any(is_destructive(p["name"], p["args"]) for p in pending):
+            return "human_approval_node"
         return "tool_executor_node"
 
-    intent = state.get("intent") or ""
-    if intent in _RANKING_INTENTS and state.get("search_results"):
-        return "ranking_node"
-    if state.get("reflection_required"):
+    if state.get("reflection_required") and not state.get("reflection_passed"):
         return "reflection_node"
-    return "response_node"
+
+    return "END"
 
 
-def route_after_ranking(state: TravelState) -> str:
-    if state.get("reflection_required"):
-        return "reflection_node"
-    return "response_node"
+def route_after_human_approval(state: Dict[str, Any]) -> str:
+    """
+    After the user responds to a confirmation prompt:
+      - confirmed  → run the tools
+      - declined   → back to agent so it can relay the cancellation in plain text
+    """
+    return "tool_executor_node" if state.get("confirmed") else "agent_node"
 
 
-def route_after_reflection(state: TravelState) -> str:
+def route_after_tool_executor(_state: Dict[str, Any]) -> str:
+    """
+    After tools finish, always return to agent_node so the model can
+    interpret the results and either call more tools or produce a final answer.
+    """
+    return "agent_node"
+
+
+def route_after_reflection(state: Dict[str, Any]) -> str:
+    """
+    After the reflection check:
+      - passed                       → END  (answer is good)
+      - failed but retries exhausted → END  (give up gracefully)
+      - failed, retries remaining    → agent_node  (one retry with feedback)
+    """
     if state.get("reflection_passed"):
-        return "response_node"
+        return "END"
     if (state.get("reflection_retries") or 0) >= 1:
-        return "response_node"
-    return "tool_planner_node"
+        return "END"
+    return "agent_node"

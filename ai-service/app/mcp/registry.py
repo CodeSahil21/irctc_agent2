@@ -5,7 +5,6 @@ from app.mcp.client import MCPClient
 from app.mcp.discovery import MCPDiscovery
 from app.mcp.normalizer import ToolResult
 from app.telemetry.logging import app_logger
-from langsmith import traceable
 
 
 class MCPToolRegistry:
@@ -53,7 +52,6 @@ class MCPToolRegistry:
 
         return cleaned_args, None
 
-    @traceable(name="mcp_execute_tool", run_type="tool")
     async def execute(
         self,
         tool_name: str,

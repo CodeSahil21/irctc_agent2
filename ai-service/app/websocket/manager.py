@@ -1,25 +1,3 @@
-# websocket/manager.py
-"""
-Socket.IO server for Phase 13.
-
-The frontend uses socket.io-client. This server uses python-socketio (AsyncServer)
-mounted as ASGI alongside FastAPI — no separate Node process needed.
-
-Event flow per query:
-  client → query:send
-  server → query:ack
-  server → agent:typing {isTyping: true}
-  server → tool:start   {tool, index, total}   (per tool)
-  server → tool:done    {tool, index}           (per tool success)
-  server → tool:failed  {tool, index, error}    (per tool failure)
-  server → message:chunk {id, delta}            (streamed reply tokens)
-  server → message:complete {message}
-  server → agent:typing {isTyping: false}
-
-  On human-approval interrupt:
-  server → agent:interrupt {id, prompt}
-  client → resume          {id, approved: bool}
-"""
 import asyncio
 from typing import Optional
 import nanoid
@@ -37,12 +15,6 @@ from app.telemetry.logging import app_logger
 
 
 def _safe_error_message(exc: Exception) -> str:
-    """
-    Convert any exception to a safe user-facing string.
-    Domain exceptions (BaseAPIException) expose their pre-sanitized message.
-    Raw SDK/provider exceptions are replaced with a generic message so that
-    API keys, account details, or internal stack info never reach the client.
-    """
     if isinstance(exc, BaseAPIException):
         return exc.message
     return "Something went wrong. Please try again."
@@ -86,7 +58,6 @@ def _make_manager(agent_graph, conv_manager):
         remove_session(sid)
         app_logger.info("Socket disconnected | sid={sid}", sid=sid)
 
-    @traceable(name="socket.stream_chunks", run_type="chain")
     async def _stream_chunks(sid: str, reply_id: str, reply: str) -> None:
         chunk_size = 4
         for i in range(0, len(reply), chunk_size):
@@ -101,7 +72,7 @@ def _make_manager(agent_graph, conv_manager):
             await asyncio.sleep(0.01)
 
     @sio.on(events.QUERY_SEND)
-    @traceable(name="socket.query_send", run_type="chain")
+    @traceable(name="WebSocket Chat Turn", run_type="chain")
     async def on_query_send(sid, data):
         """
         data: {id: str, content: str}
@@ -135,17 +106,19 @@ def _make_manager(agent_graph, conv_manager):
             user_preferences = conv.get("preferences")
 
         try:
+            # Only pass fields that have real values.
+            # LangGraph merges initial_state into the checkpoint using each
+            # field's reducer.  All fields except `messages` use last-write-wins,
+            # so passing None for any field OVERWRITES the checkpointed value and
+            # causes the agent to "forget" search results, fare, train, etc.
             initial_state = {
-                "messages": [HumanMessage(content=content)],
-                "user_email": session.user_email,
-                "user_name": session.user_name,
-                "user_preferences": user_preferences,
+                k: v for k, v in {
+                    "messages": [HumanMessage(content=content)],
+                    "user_email": session.user_email,
+                    "user_name": session.user_name,
+                    "user_preferences": user_preferences,
+                }.items() if v is not None
             }
-
-            # ── Auto-resume interrupted graph on yes/no message ───────────
-            # If graph is in interrupted state (waiting for booking confirmation)
-            # and user types "yes"/"no" as a text message instead of using
-            # the resume socket event, handle it transparently.
             _YES = {"yes", "y", "yep", "yeah", "sure", "go ahead", "proceed",
                     "confirm", "ok", "okay", "book it", "do it", "absolutely"}
             _NO  = {"no", "n", "nope", "cancel", "stop", "don't", "dont"}
@@ -255,7 +228,7 @@ def _make_manager(agent_graph, conv_manager):
             await sio.emit(events.AGENT_TYPING, {"isTyping": False}, to=sid)
 
     @sio.on(events.RESUME)
-    @traceable(name="socket.resume", run_type="chain")
+    @traceable(name="WebSocket Resume Turn", run_type="chain")
     async def on_resume(sid, data):
         """
         data: {id: str, approved: bool}
@@ -320,11 +293,18 @@ async def _run_graph(
 ) -> Optional[dict]:
     """
     Run the agent graph. Emits tool:start / tool:done / tool:failed events
-    by streaming graph node transitions via astream_events.
+    by watching tool_executor_node output via astream_events.
+
+    New architecture: tool_planner_node no longer exists. The agent_node emits
+    pending_tool_calls each loop; tool_executor_node runs them and appends to
+    tool_history. We derive tool names and status directly from tool_history
+    diffs rather than a pre-declared tool_plan list.
+
     Returns final result dict, or None if interrupted.
     """
-    tool_index = 0
-    tool_plan: list = []
+    # Track tool_history length across executor firings so we can emit events
+    # for only the NEW entries added by each executor invocation.
+    seen_tool_count = 0
     result: dict = {}
 
     async for event in agent_graph.astream_events(initial_state, config=config, version="v2"):
@@ -332,54 +312,50 @@ async def _run_graph(
         name = event.get("name", "")
         data = event.get("data", {})
 
-        if kind == "on_chain_start" and name == "tool_planner_node":
-            # Reset tool tracking when planner fires
-            tool_index = 0
-            tool_plan = []
-
-        elif kind == "on_chain_end" and name == "tool_planner_node":
-            output = data.get("output") or {}
-            tool_plan = output.get("tool_plan") or []
-
-        elif kind == "on_chain_start" and name == "tool_executor_node":
-            if tool_plan and tool_index < len(tool_plan):
-                tool_name = tool_plan[tool_index]
+        if kind == "on_chain_start" and name == "agent_node":
+            # Emit pending tool names when agent fires a new batch of calls.
+            # We don't have results yet — just signal what's about to run.
+            input_state = data.get("input") or {}
+            pending = input_state.get("pending_tool_calls") or []
+            for i, p in enumerate(pending):
                 await sio.emit(events.TOOL_START, {
-                    "tool": tool_name,
-                    "index": tool_index,
-                    "total": len(tool_plan),
+                    "tool": p.get("name", "unknown"),
+                    "index": seen_tool_count + i,
+                    "total": seen_tool_count + len(pending),
                 }, to=sid)
 
         elif kind == "on_chain_end" and name == "tool_executor_node":
             output = data.get("output") or {}
             history = output.get("tool_history") or []
-            if history:
-                last = history[-1]
-                if last.get("status") in ("success",):
+            # Only process entries added by this executor call
+            new_entries = history[seen_tool_count:]
+            for i, entry in enumerate(new_entries):
+                idx = seen_tool_count + i
+                if entry.get("status") == "success":
                     await sio.emit(events.TOOL_DONE, {
-                        "tool": last["tool"],
-                        "index": tool_index,
+                        "tool": entry.get("tool", "unknown"),
+                        "index": idx,
                     }, to=sid)
                 else:
+                    result_payload = entry.get("result") or {}
                     await sio.emit(events.TOOL_FAILED, {
-                        "tool": last["tool"],
-                        "index": tool_index,
-                        "error": str(last.get("result", {}).get("message", "failed")),
+                        "tool": entry.get("tool", "unknown"),
+                        "index": idx,
+                        "error": str(result_payload.get("message", "failed")),
                     }, to=sid)
-                tool_index += 1
+            seen_tool_count = len(history)
 
         elif kind == "on_chain_end" and name == "LangGraph":
-            # Final graph output
             output = data.get("output") or {}
             result = output
 
-    # Check if graph was interrupted (human approval pending)
-    # Only fire interrupt if book_ticket (or other destructive tool) hasn't run yet
+    # Check if graph was interrupted (human approval pending).
+    # Interrupt is fired when confirmation_required is set but the destructive
+    # tool has not run yet (confirmed is False/None).
     tool_history = result.get("tool_history") or []
-    destructive_ran = any(
-        t.get("tool") in ("book_ticket", "cancel_ticket", "update_boarding_point", "delete_reminder")
-        for t in tool_history
-    )
+    destructive_tools = {"book_ticket", "cancel_ticket", "update_booking", "manage_reminder"}
+    destructive_ran = any(t.get("tool") in destructive_tools for t in tool_history)
+
     if result.get("confirmation_required") and not result.get("confirmed") and not destructive_ran:
         session = get_session(sid)
         if session:

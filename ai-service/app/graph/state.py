@@ -1,28 +1,14 @@
 # graph/state.py
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
+
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 
-class TravelContext(TypedDict, total=False):
-    from_station: Optional[str]
-    to_station: Optional[str]
-    date: Optional[str]                          # single ISO date YYYY-MM-DD
-    date_range: Optional[List[str]]              # list of ISO dates for flexible/week searches
-    travel_class: Optional[str]
-    quota: Optional[str]
-    train_number: Optional[str]
-    train_name: Optional[str]
-    pnr: Optional[str]
-    selected_passengers: Optional[List[Dict[str, Any]]]  # passengers chosen for booking
-    new_passenger_for_booking: Optional[Dict[str, Any]]  # unsaved passenger being collected
-    save_new_passenger: Optional[bool]           # whether to save the new passenger after booking
-
-
 class UserPreferences(TypedDict, total=False):
-    preferred_class: Optional[str]       # e.g. "3A"
-    preferred_quota: Optional[str]       # e.g. "GN"
-    berth_preference: Optional[str]      # e.g. "LB"
+    preferred_class: Optional[str]
+    preferred_quota: Optional[str]
+    berth_preference: Optional[str]
     senior_citizen: Optional[bool]
 
 
@@ -34,11 +20,11 @@ class ExecutionMetrics(TypedDict, total=False):
 
 
 class ToolCall(TypedDict, total=False):
+    id: str
     tool: str
     args: Dict[str, Any]
     result: Optional[Any]
-    status: str  # "pending" | "success" | "error" | "failed"
-    retries: int
+    status: str          # "success" | "failed"
     latency_ms: Optional[float]
 
 
@@ -48,36 +34,29 @@ class TravelState(TypedDict):
     conversation_id: Optional[str]
     turn_count: Optional[int]
 
-    # ── Intent & Planning ─────────────────────────────────────────────
-    intent: Optional[str]
-    user_goal: Optional[str]
+    # ── User Identity ─────────────────────────────────────────────────
+    user_email: Optional[str]
+    user_name: Optional[str]
 
-    # ── Travel Context (persisted across turns via checkpointer) ──────
-    travel: Optional[TravelContext]
+    # ── User Preferences (long-lived) ─────────────────────────────────
+    user_preferences: Optional[UserPreferences]
 
-    # ── Search / Booking Results ──────────────────────────────────────
-    search_results: Optional[List[Dict[str, Any]]]
-    selected_train: Optional[Dict[str, Any]]
-    availability: Optional[Dict[str, Any]]
-    fare: Optional[Dict[str, Any]]
-    passengers: Optional[List[Dict[str, Any]]]
-    booking: Optional[Dict[str, Any]]
-    reminders: Optional[List[Dict[str, Any]]]
-    saved_passengers: Optional[List[Dict[str, Any]]]
-    # Generic bucket for tool results not covered by dedicated fields
-    # (route, seat_map, live_status, platform, schedule, stations, etc.)
-    tool_results: Optional[Dict[str, Any]]
+    # ── Agent loop ────────────────────────────────────────────────────
+    # tool_calls emitted by agent_node, awaiting approval/execution
+    pending_tool_calls: Optional[List[Dict[str, Any]]]
 
-    # ── Slot Filling ──────────────────────────────────────────────────
-    missing_slots: Optional[List[str]]
-    pending_question: Optional[str]
+    # increments each time agent_node is re-entered this turn; reset to 0 on
+    # final answer or at the start of a new user turn
+    agent_loop_count: Optional[int]
 
     # ── Tool Execution ────────────────────────────────────────────────
-    tool_plan: Optional[List[str]]
-    tool_plan_args: Optional[List[Dict[str, Any]]]
+    # accumulates within a single user turn; reset at the start of each new turn
     tool_history: Optional[List[ToolCall]]
-    current_tool_index: Optional[int]
-    parallel_results: Optional[Dict[str, Any]]   # tool_name → result for parallel group
+
+    # survives across turns for the life of the conversation:
+    #   "get_booking_history" → list of slim booking dicts
+    #   "get_saved_passengers" → list of passenger dicts
+    persistent_results: Optional[Dict[str, Any]]
 
     # ── Reflection ────────────────────────────────────────────────────
     reflection_required: Optional[bool]
@@ -85,24 +64,34 @@ class TravelState(TypedDict):
     reflection_feedback: Optional[str]
     reflection_retries: Optional[int]
 
-    # ── Ranking ───────────────────────────────────────────────────────
-    ranked_results: Optional[List[Dict[str, Any]]]  # sorted search results
-
     # ── Human Approval / Interrupt Gate ──────────────────────────────
     confirmation_required: Optional[bool]
     confirmation_prompt: Optional[str]
     confirmed: Optional[bool]
 
-    # ── Error / Retry ─────────────────────────────────────────────────
-    retries: Optional[int]
+    # ── Error tracking ────────────────────────────────────────────────
     errors: Optional[List[str]]
 
-    # ── User Identity ─────────────────────────────────────────────────
-    user_email: Optional[str]
-    user_name: Optional[str]
-
-    # ── User Preferences (Layer 3 memory — long-lived) ────────────────
-    user_preferences: Optional[UserPreferences]
+    # ── Slot-filling / pending intent tracking ────────────────────────
+    # When the agent asks the user for a missing detail mid-booking/action,
+    # these fields survive in the checkpoint so the next turn knows exactly
+    # what it was building toward and what it has already collected.
+    pending_intent: Optional[str]          # e.g. "book_ticket", "cancel_ticket"
+    collected_slots: Optional[Dict[str, Any]]  # args collected so far for pending_intent
 
     # ── Execution Metrics ─────────────────────────────────────────────
     execution_metrics: Optional[ExecutionMetrics]
+
+    # ── Backward-compat fields read by chat.py response serialiser ────
+    # These are kept so the /agent endpoint response contract is unchanged.
+    # agent_node writes them into persistent_results; chat.py also reads
+    # them directly, so we expose the most recent values at the top level.
+    intent: Optional[str]            # last inferred intent (informational only)
+    travel: Optional[Dict[str, Any]] # last extracted travel context (informational)
+    search_results: Optional[List[Dict[str, Any]]]
+    ranked_results: Optional[List[Dict[str, Any]]]
+    selected_train: Optional[Dict[str, Any]]
+    availability: Optional[Dict[str, Any]]
+    fare: Optional[Dict[str, Any]]
+    booking: Optional[Dict[str, Any]]
+    passengers: Optional[List[Dict[str, Any]]]

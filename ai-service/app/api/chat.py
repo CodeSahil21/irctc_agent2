@@ -1,4 +1,6 @@
 import json
+from typing import Any, Dict
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
@@ -61,7 +63,6 @@ async def create_chat_completion(
     summary="Stream LLM response token-by-token",
     description="Establishes an SSE stream emitting JSON tokens in real-time.",
 )
-@traceable(name="POST /chat/stream", run_type="chain")
 async def stream_chat_completion(
     request: ChatRequest,
     chat_service: ChatService = Depends(get_chat_service),
@@ -115,7 +116,7 @@ async def stream_chat_completion(
     "/agent",
     status_code=status.HTTP_200_OK,
     summary="Run the IRCTC LangGraph agent",
-    description="Runs the full agent graph: intent → slot filling → tool planning → execution → response.",
+    description="Runs the full agent graph: agent loop → tool execution → reflection → response.",
 )
 @traceable(name="POST /agent", run_type="chain")
 async def run_agent(
@@ -141,19 +142,30 @@ async def run_agent(
             resume_value = request.resume_value if request.resume_value is not None else True
             result = await agent_graph.ainvoke(Command(resume=resume_value), config=config)
         else:
-            initial_state = {
+            # Only include fields that have real values — passing None for any
+            # field overwrites the checkpointed value (last-write-wins reducer).
+            # messages is the only field safe to always include (add_messages reducer).
+            initial_state: Dict[str, Any] = {
                 "messages": [HumanMessage(content=request.message)],
-                "travel": request.travel_context or {},
-                "user_email": request.user_email,
-                "user_name": request.user_name,
-                "user_preferences": user_preferences,
-                "search_results": request.search_results,
-                "selected_train": request.selected_train,
-                "availability": request.availability,
-                "fare": request.fare,
-                "passengers": request.passengers,
-                "booking": request.booking,
             }
+            if request.user_email is not None:
+                initial_state["user_email"] = request.user_email
+            if request.user_name is not None:
+                initial_state["user_name"] = request.user_name
+            if user_preferences is not None:
+                initial_state["user_preferences"] = user_preferences
+            if request.search_results is not None:
+                initial_state["search_results"] = request.search_results
+            if request.selected_train is not None:
+                initial_state["selected_train"] = request.selected_train
+            if request.availability is not None:
+                initial_state["availability"] = request.availability
+            if request.fare is not None:
+                initial_state["fare"] = request.fare
+            if request.passengers is not None:
+                initial_state["passengers"] = request.passengers
+            if request.booking is not None:
+                initial_state["booking"] = request.booking
             result = await agent_graph.ainvoke(initial_state, config=config)
     except BaseAPIException:
         # Domain exceptions (RateLimitException, ServiceUnavailableException, etc.)
