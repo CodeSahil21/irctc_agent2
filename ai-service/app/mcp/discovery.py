@@ -18,6 +18,7 @@ class MCPDiscovery:
         self._client = client
         self._tools: List[Dict[str, Any]] = []
         self._by_name: Dict[str, Dict[str, Any]] = {}
+        self._schema_by_name: Dict[str, Dict[str, Any]] = {}  # pre-built at discover()
 
     async def discover(self) -> None:
         """
@@ -29,6 +30,16 @@ class MCPDiscovery:
         self._tools = [self._normalize_tool(t) for t in raw_tools]
         # Index by the function name inside the OpenAI wrapper
         self._by_name = {t["function"]["name"]: t for t in self._tools}
+        # Pre-build flattened schema dicts so get_tool_schema() is a zero-cost
+        # dict lookup instead of constructing a new object on every call.
+        self._schema_by_name: Dict[str, Dict[str, Any]] = {
+            name: {
+                "name": name,
+                "description": t["function"].get("description", ""),
+                "input_schema": t["function"].get("parameters", {}),
+            }
+            for name, t in self._by_name.items()
+        }
 
         app_logger.info(
             "Tool discovery complete | tools={names}",
@@ -65,19 +76,10 @@ class MCPDiscovery:
 
     def get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
         """
-        Return the schema dict for a tool by name.
-        Returns a flattened dict with 'input_schema' key so slot_filler_node
-        can read input_schema.properties / input_schema.required as before.
+        Return the pre-built flattened schema dict for a tool by name.
+        Zero-cost dict lookup — the object is built once at discovery time.
         """
-        wrapped = self._by_name.get(name)
-        if wrapped is None:
-            return None
-        fn = wrapped["function"]
-        return {
-            "name": fn["name"],
-            "description": fn.get("description", ""),
-            "input_schema": fn.get("parameters", {}),
-        }
+        return self._schema_by_name.get(name)
 
     def is_known(self, name: str) -> bool:
         return name in self._by_name

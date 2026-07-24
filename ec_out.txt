@@ -126,3 +126,78 @@ Now, please provide the **passenger d
   PASS: 38
   FAIL: 0
 ============================================================
+
+
+Namaste! I'm your IRCTC assistant. Ask me to check PNR status, find trains between stations, or check seat availability.
+
+12:55
+
+**YOU**
+
+hello how are you
+
+12:55
+
+◇
+
+Hello! I'm here to assist you with your travel needs. How can I help you today?
+
+12:55
+
+**YOU**
+
+can you help me find train from delhi to kota that is available tomorrow
+
+12:56
+
+◇
+
+Hello! I'm here to assist you with your travel needs. How can I help you today?
+
+12:56
+
+**YOU**
+
+Seat availability in Rajdhani Express
+
+12:56
+
+**YOU**
+
+can you help me find train from delhi to kota that is available tomorrow\
+
+12:56
+
+◇
+
+Here are the seat availability details for trains from Delhi to Kota tomorrow (July 25, 2026):
+
+**Train NameTrain NumberDepartureArrivalDurationClassAvailability**New Delhi Rajdhani Express1295216:2523:1506:501AAVAILABLE (72 seats)Paschim Express1292613:1519:5006:352ARAC (4 seats)Golden Temple Mail1290415:4522:2006:352AWL (30 seats)
+
+The **New Delhi Rajdhani Express** has availability in 1st AC (1A) class. Would you like to book a ticket for this train?
+
+12952
+
+New Delhi Rajdhani Express
+
+NDLS 16:25 → KOTA 23:15
+
+06:50
+
+12:56
+
+◇
+
+Here are the available trains from Delhi to Kota for tomorrow (July 25, 2026):
+
+**Train NameTrain NumberClassAvailabilitySeats Available**New Delhi Rajdhani Express129521AAVAILABLE72New Delhi Rajdhani Express129522AAVAILABLE73New Delhi Rajdhani Express129523ARAC4Paschim Express12926SLAVAILABLE38Paschim Express129262ARAC4Paschim Express129263AWL5Golden Temple Mail12904SLRAC4Golden Temple Mail129042AWL30Golden Temple Mail129043AAVAILABLE71
+
+If you would like to book a ticket on any of these trains, please let me know!
+
+12952
+
+New Delhi Rajdhani Express
+
+NDLS 16:25 → KOTA 23:15
+
+as you can see for that mesage i got repsoen worng then got corrcet later automatically in chat

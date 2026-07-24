@@ -63,6 +63,8 @@ class TravelState(TypedDict):
     reflection_passed: Optional[bool]
     reflection_feedback: Optional[str]
     reflection_retries: Optional[int]
+    reflection_tool_offset: Optional[int]       # tool_history length before last executor batch
+    reflection_tool_snapshot: Optional[List[Dict[str, Any]]]  # tools relevant to current reply
 
     # ── Human Approval / Interrupt Gate ──────────────────────────────
     confirmation_required: Optional[bool]

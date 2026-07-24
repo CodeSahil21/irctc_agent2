@@ -14,7 +14,7 @@ export interface InterruptPayload {
 }
 
 export interface ClientToServerEvents {
-  "query:send": (payload: { id: string; content: string }) => void;
+  "query:send": (payload: { id: string; content: string; conversationId?: string }) => void;
   "resume": (payload: { id: string; approved: boolean }) => void;
   "typing:start": () => void;
   "typing:stop": () => void;

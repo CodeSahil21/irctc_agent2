@@ -12,6 +12,7 @@ class SocketSession:
     pending_user_message: Optional[str] = None
     pending_message_id: Optional[str] = None
     interrupted: bool = False  # True when graph is paused at human_approval_node
+    processing: bool = False   # True while a query is in-flight — blocks concurrent requests
 
 
 # sid → SocketSession

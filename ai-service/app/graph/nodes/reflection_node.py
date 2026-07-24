@@ -64,9 +64,13 @@ async def reflection_node(
     tool_history: list = state.get("tool_history") or []
     retries: int = state.get("reflection_retries") or 0
 
+    # Use the snapshot (tools relevant to the current reply) when available.
+    # Falls back to full tool_history for backward compatibility.
+    relevant_tools: list = state.get("reflection_tool_snapshot") or tool_history
+
     # ── Fast path: deterministic failure when any tool errored ──────────────
     has_failures = bool(errors) or any(
-        h.get("status") == "failed" for h in tool_history
+        h.get("status") == "failed" for h in relevant_tools
     )
     if has_failures:
         feedback = "; ".join(errors) if errors else "One or more tools failed."
@@ -75,6 +79,7 @@ async def reflection_node(
             "reflection_feedback": feedback,
             "reflection_required": False,
             "reflection_retries": retries + 1,
+            "reflection_tool_snapshot": None,
         }
 
     # ── LLM quality check ────────────────────────────────────────────────────
@@ -83,17 +88,20 @@ async def reflection_node(
     for m in reversed(state.get("messages", [])):
         if m.__class__.__name__ == "AIMessage":
             last_ai_content = getattr(m, "content", "") or ""
-            break
+            if last_ai_content.strip():
+                break
 
-    # Compact summary of tool calls (avoid sending full payloads to the checker)
+    # Compact summary — only the tools relevant to this reply
     summary = [
         {"tool": h["tool"], "status": h["status"]}
-        for h in tool_history[-6:]
+        for h in relevant_tools[-6:]
     ]
     prompt = (
         f"Draft reply:\n{last_ai_content}\n\n"
-        f"Tool calls made this turn:\n{json.dumps(summary, indent=2)}\n\n"
-        "Is the reply complete and consistent with these results?"
+        f"Tool calls for this reply:\n{json.dumps(summary, indent=2)}\n\n"
+        "Is the reply complete and consistent with these results? "
+        "A brief reply is fine — it does not need to repeat all tool data, "
+        "only address what the user asked."
     )
 
     try:
@@ -120,6 +128,7 @@ async def reflection_node(
             "reflection_feedback": feedback,
             "reflection_required": False,
             "reflection_retries": retries + 1,
+            "reflection_tool_snapshot": None,
         }
 
     except Exception:
@@ -129,4 +138,5 @@ async def reflection_node(
             "reflection_required": False,
             "reflection_feedback": "",
             "reflection_retries": retries + 1,
+            "reflection_tool_snapshot": None,
         }

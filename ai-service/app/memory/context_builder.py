@@ -43,9 +43,14 @@ def build_tool_context(state: TravelState) -> str:
             f"Booking History:\n{json.dumps(persistent['get_booking_history'], indent=2)}"
         )
     if persistent.get("get_saved_passengers"):
-        parts.append(
-            f"Saved Passengers:\n{json.dumps(persistent['get_saved_passengers'], indent=2)}"
-        )
+        saved_val = persistent["get_saved_passengers"]
+        # Normalize dict → list in case old checkpoint stored normalized result
+        if isinstance(saved_val, dict):
+            saved_val = saved_val.get("passengers") or []
+        if saved_val:
+            parts.append(
+                f"Saved Passengers:\n{json.dumps(saved_val, indent=2)}"
+            )
 
     if state.get("errors"):
         parts.append("Errors encountered:\n" + "\n".join(state["errors"]))

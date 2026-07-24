@@ -38,7 +38,7 @@ _TOOL_REQUIRED_SLOTS: Dict[str, List[str]] = {
     "find_station":          ["query"],
     "create_reminder":       ["trainNumber", "reminderType", "reminderTime"],
     "manage_reminder":       ["action"],
-    "add_saved_passenger":   ["name", "age", "gender"],
+    "add_saved_passenger":   ["name", "age", "gender", "berthPreference"],
 }
 
 # Human-readable labels for slot names shown in the context block
@@ -49,7 +49,7 @@ _SLOT_LABELS: Dict[str, str] = {
     "toStation":     "destination station code",
     "travelClass":   "travel class (e.g. SL, 3A, 2A, 1A)",
     "quota":         "quota (default: GN)",
-    "passengers":    "passenger details (name, age, gender for each)",
+    "passengers":    "passenger details (name, age, gender, berth preference for each)",
     "pnr":           "PNR number",
     "stationCode":   "station code",
     "query":         "search query",
@@ -58,7 +58,8 @@ _SLOT_LABELS: Dict[str, str] = {
     "reminderTime":  "reminder time",
     "name":          "passenger name",
     "age":           "passenger age",
-    "gender":        "passenger gender",
+    "gender":        "passenger gender (MALE / FEMALE / OTHER)",
+    "berthPreference": "berth preference (LB = lower, MB = middle, UB = upper, SL = side lower, SUB = side upper, WS = window seat)",
     "newBoardingStation": "new boarding station code",
 }
 
@@ -71,13 +72,6 @@ _SYSTEM_TEMPLATE = """\
 You are the official IRCTC AI Travel Assistant. You have live tools for train \
 search, seat availability, fares, booking, cancellation, reminders, and account \
 management.
-
-TODAY'S DATE: {today}
-Use this date as the reference for all relative date expressions ("tomorrow", \
-"this weekend", "next Monday", "this week", "next week", etc.). \
-Always resolve them to an explicit YYYY-MM-DD date before calling any tool. \
-NEVER use a date from 2023 or any year other than the current year unless the \
-user explicitly provides a past date.
 
 INTENT GATE — READ THIS BEFORE CALLING ANY TOOL
 You must ONLY call a tool when the user has explicitly requested the corresponding \
@@ -102,8 +96,9 @@ explicit request is a critical error.
 
 SLOT-FILLING PROTOCOL
 When you need to call a tool but one or more required arguments are missing:
-1. Check the CURRENT SESSION CONTEXT below — values already collected are listed \
-under "Collecting details for <tool>". Do NOT re-ask for anything already there.
+1. Check the session context message at the top of the conversation — values already \
+collected are listed under "Collecting details for <tool>". Do NOT re-ask for anything \
+already there.
 2. Ask the user for exactly ONE missing field at a time. Be specific: tell them \
 what you need and why (e.g. "Which travel class would you like — SL, 3A, 2A or 1A?").
 3. As soon as ALL required fields are available (from context + conversation), \
@@ -118,8 +113,11 @@ BOOKING RULES
 - Only start the book_ticket flow when the user explicitly says they want to book \
 (e.g. "book this", "I want to book", "reserve a seat", "book the Rajdhani").
 - Before calling book_ticket, you MUST have ALL of: trainNumber, journeyDate \
-(YYYY-MM-DD), fromStation, toStation, travelClass, passengers (name/age/gender \
+(YYYY-MM-DD), fromStation, toStation, travelClass, passengers (name/age/gender/berthPreference \
 for each), quota (default GN if not specified). \
+- For each passenger, collect name, age, gender ONE AT A TIME. Then ask for berth \
+preference: "What berth preference for [name]? (LB = lower, MB = middle, UB = upper, \
+SL = side lower, SUB = side upper, WS = window seat, NP = no preference)". \
 - If journeyDate is not in context, call check_availability for the selected train \
 first — the response includes journeyDate. \
 - If the user says "use my saved passenger" or names a passenger from the saved \
@@ -130,13 +128,31 @@ separately after you call book_ticket. Just call it.
 PASSENGER MANAGEMENT RULES
 - Only call add_saved_passenger when the user explicitly asks to save or add a \
 passenger (e.g. "save this passenger", "add passenger", "add Ryan to my list").
-- Always ask for name, age, and gender before calling add_saved_passenger if any \
-of these are missing. Do not invent or reuse values from a previous booking context \
+- Collect name, age, gender, and berthPreference ONE AT A TIME before calling \
+add_saved_passenger. Ask for each missing field separately — never re-show all \
+fields at once if some are already collected.
+- If name, age, and gender are already collected but berthPreference is missing, \
+ask ONLY: "What berth preference should I save for [name]? \
+(LB = lower, MB = middle, UB = upper, SL = side lower, SUB = side upper, WS = window seat)" \
+— do not ask for any other field.
+- Do not invent or reuse values from a previous booking context \
 unless the user explicitly refers to them.
 
 CORE RULES
 - Use tools to get real data. NEVER invent or guess PNRs, train numbers, fares, \
 seat counts, or availability.
+- NEVER pre-select a travel class (SL, 3A, 2A, 1A etc.) on behalf of the user. \
+If the user has not specified a class: either ask "Which class would you prefer — \
+SL, 3A, 2A, or 1A?" OR show availability/fare for all classes so the user can choose.
+- NEVER assume quota (GN, TQ, LD etc.) — use GN as default only when booking, \
+never when searching or checking availability.
+- If the user provides a PNR directly in their message, use it immediately for \
+cancel_ticket or update_booking — do NOT call get_booking_history to "verify" it. \
+The user knows their own PNR.
+- If a PNR is already shown in the session context (under "PNRs:" or \
+"Last booking"), use it directly — do NOT call get_booking_history again.
+- Only call get_booking_history when the user has NOT provided a PNR and you \
+genuinely need to look one up (e.g. "cancel my most recent booking").
 - Resolve station names/cities to codes with find_station before using them \
 elsewhere, unless you already have a valid 2–5 letter station code.
 - When comparing several trains (fares, availability, etc.), emit all relevant tool \
@@ -151,128 +167,214 @@ breakdown when available.
 tools for everything.
 - Be concise and professional.
 
-CONTEXT
-{context}
+DATE HANDLING
+- Use relative date expressions ("tomorrow", "this weekend", "next Monday", etc.) \
+based on the current date provided in the session context.
+- Always resolve them to an explicit YYYY-MM-DD date before calling any tool.
+- NEVER use a date from 2023 or any year other than the current year unless the \
+user explicitly provides a past date.
 {feedback}
 """
+
+
+# ---------------------------------------------------------------------------
+# Per-request schema cache
+# ---------------------------------------------------------------------------
+
+class SchemaCache:
+    """
+    Request-scoped cache for MCP tool schemas.
+
+    Created once at the top of agent_node(), used throughout the call,
+    then garbage-collected automatically — no manual invalidation needed.
+
+    - get_tool_list()  → fetches all schemas once, returns the same list
+    - get(tool_name)   → fetches a single tool schema once, caches per-tool
+    """
+
+    def __init__(self, mcp_registry) -> None:
+        self._registry = mcp_registry
+        self._tool_list: Optional[List[Dict[str, Any]]] = None
+        self._by_name: Dict[str, Optional[Dict[str, Any]]] = {}
+
+    def get_tool_list(self) -> List[Dict[str, Any]]:
+        """Fetched from registry exactly once per request."""
+        if self._tool_list is None:
+            self._tool_list = self._registry.get_tool_schemas() if self._registry else []
+        return self._tool_list
+
+    def get(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """Fetched from registry at most once per tool per request."""
+        if tool_name not in self._by_name:
+            self._by_name[tool_name] = (
+                self._registry.get_tool_schema(tool_name) if self._registry else None
+            )
+        return self._by_name[tool_name]
+
+    def known_tool_names(self) -> set:
+        return {t["function"]["name"] for t in self.get_tool_list()}
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _missing_slots(tool_name: str, collected: Dict[str, Any]) -> List[str]:
+def _required_slots_for(tool_name: str, cache: Optional["SchemaCache"] = None) -> List[str]:
+    """
+    Return the required slot names for a tool.
+
+    Priority order:
+    1. Live MCP schema (input_schema.required) — dynamically reflects the real
+       tool contract so any change on the MCP server is picked up automatically.
+    2. Hardcoded _TOOL_REQUIRED_SLOTS fallback — used when cache is not
+       available (e.g. during tests or before startup discovery completes).
+    """
+    if cache is not None:
+        schema_info = cache.get(tool_name)
+        if schema_info:
+            mcp_required = (schema_info.get("input_schema") or {}).get("required", [])
+            if mcp_required:
+                return mcp_required
+    return _TOOL_REQUIRED_SLOTS.get(tool_name, [])
+
+
+def _slot_label_from_schema(slot_name: str, tool_name: str,
+                             cache: Optional["SchemaCache"] = None) -> str:
+    """
+    Return a human-readable label for a slot.
+
+    Checks _SLOT_LABELS first (curated, user-friendly phrasing).
+    Falls back to the MCP schema property description, then the raw slot name.
+    The schema is already in the per-request cache so this is a dict lookup.
+    """
+    if slot_name in _SLOT_LABELS:
+        return _SLOT_LABELS[slot_name]
+    if cache is not None:
+        schema_info = cache.get(tool_name)   # cache hit — no registry call
+        if schema_info:
+            props = (schema_info.get("input_schema") or {}).get("properties") or {}
+            prop = props.get(slot_name, {})
+            desc = prop.get("description") or prop.get("title")
+            if desc:
+                return desc.split(".")[0][:80]
+    return slot_name.replace("_", " ")
+
+
+def _missing_slots(tool_name: str, collected: Dict[str, Any],
+                   cache: Optional["SchemaCache"] = None) -> List[str]:
     """Return the list of required slot names not yet present in collected."""
-    required = _TOOL_REQUIRED_SLOTS.get(tool_name, [])
+    required = _required_slots_for(tool_name, cache)
     return [s for s in required if not collected.get(s)]
 
 
-def _build_context(state: Dict[str, Any]) -> str:
-    lines: List[str] = [f"- Signed in as: {state.get('user_email') or 'unknown'}"]
+def _build_session_context_message(
+    state: Dict[str, Any],
+    cache: Optional["SchemaCache"] = None,
+    last_turn_summary: str = "",
+) -> str:
+    """
+    Build a per-turn session context block — pure facts, no instructions.
 
+    Think of this as the agent's notepad: who the user is, what we know
+    about them, what happened this conversation. The agent decides what
+    to do with this information — no "do not call" or "use this directly"
+    directives here.
+    """
+    today = date.today().isoformat()
+    user_email = state.get("user_email") or "unknown"
+    user_name  = state.get("user_name")
+    user_label = f"{user_name} ({user_email})" if user_name else user_email
+
+    lines: List[str] = [
+        "[SESSION CONTEXT]",
+        f"Date: {today}",
+        f"User: {user_label}",
+    ]
+
+    # ── User preferences ─────────────────────────────────────────────────────
     prefs = state.get("user_preferences") or {}
+    pref_parts = []
     if prefs.get("preferred_class"):
-        lines.append(f"- Preferred class: {prefs['preferred_class']}")
+        pref_parts.append(f"class={prefs['preferred_class']}")
     if prefs.get("preferred_quota"):
-        lines.append(f"- Preferred quota: {prefs['preferred_quota']}")
+        pref_parts.append(f"quota={prefs['preferred_quota']}")
     if prefs.get("berth_preference"):
-        lines.append(f"- Preferred berth: {prefs['berth_preference']}")
+        pref_parts.append(f"berth={prefs['berth_preference']}")
     if prefs.get("senior_citizen"):
-        lines.append("- Senior citizen discount applies")
+        pref_parts.append("senior_citizen=yes")
+    if pref_parts:
+        lines.append(f"Preferences: {', '.join(pref_parts)}")
 
     persistent = state.get("persistent_results") or {}
-    history = persistent.get("get_booking_history")
-    if history is not None:
-        if history:
-            lines.append(
-                f"- {len(history)} past booking(s) already fetched this session "
-                f"(reuse unless the user asks to refresh)."
-            )
-        else:
-            lines.append(
-                "- Booking history already fetched this session: no bookings found "
-                "(do NOT call get_booking_history again unless the user explicitly asks to refresh)."
-            )
+
+    # ── Saved passengers ──────────────────────────────────────────────────────
     saved = persistent.get("get_saved_passengers")
-    if saved:
-        names = ", ".join(p.get("name", "?") for p in saved)
-        lines.append(f"- Saved passengers: {names}")
-
-    # ── Pending intent — mid-collection state ────────────────────────────────
-    pending_intent: Optional[str] = state.get("pending_intent")
-    collected: Dict[str, Any] = state.get("collected_slots") or {}
-    if pending_intent:
-        lines.append("")
-        lines.append(f"COLLECTING DETAILS FOR: {pending_intent}")
-        lines.append("Already collected (do NOT re-ask for these):")
-        if collected:
-            for k, v in collected.items():
-                label = _SLOT_LABELS.get(k, k)
-                lines.append(f"  ✓ {label}: {v}")
-        missing = _missing_slots(pending_intent, collected)
-        if missing:
-            labels = [_SLOT_LABELS.get(s, s) for s in missing]
-            lines.append(f"Still needed: {', '.join(labels)}")
-            lines.append(
-                f"Ask for the FIRST missing field only: {_SLOT_LABELS.get(missing[0], missing[0])}"
-            )
+    if isinstance(saved, dict):
+        saved = saved.get("passengers") or []
+    if isinstance(saved, list):
+        if saved:
+            pax_lines = []
+            for p in saved:
+                if not isinstance(p, dict):
+                    continue
+                parts = [p.get("name", "?")]
+                if p.get("age"):   parts.append(f"age {p['age']}")
+                if p.get("gender"): parts.append(p["gender"])
+                if p.get("berthPreference"): parts.append(f"berth={p['berthPreference']}")
+                pax_lines.append(", ".join(parts))
+            lines.append(f"Saved passengers: {' | '.join(pax_lines)}")
         else:
-            lines.append(
-                "ALL required fields are now collected — call the tool immediately."
-            )
+            lines.append("Saved passengers: none")
 
-    # ── Active travel context ────────────────────────────────────────────────
-    lines.append("")
-    lines.append("CURRENT SESSION CONTEXT (do not ask the user for these again):")
+    # ── Past bookings ─────────────────────────────────────────────────────────
+    last_booking = persistent.get("last_booking") or {}
+    if last_booking.get("pnr"):
+        lines.append(
+            f"Most recent booking: PNR {last_booking['pnr']} | "
+            f"train {last_booking.get('trainNumber', '?')} | "
+            f"date {last_booking.get('journeyDate', '?')} | "
+            f"status {last_booking.get('status', '?')}"
+        )
 
+    history = persistent.get("get_booking_history")
+    if isinstance(history, list) and history:
+        pnr_list = ", ".join(b.get("pnr", "?") for b in history if isinstance(b, dict) and b.get("pnr"))
+        lines.append(f"Past bookings this session ({len(history)}): {pnr_list}")
+
+    # ── This conversation's travel context ────────────────────────────────────
     trains = state.get("ranked_results") or state.get("search_results") or []
     if trains:
-        lines.append(f"- Train search results available: {len(trains)} train(s) found.")
+        lines.append(f"Trains found this session ({len(trains)}):")
         for t in trains[:5]:
-            num   = t.get("trainNumber", "?")
-            name  = t.get("trainName", "")
-            dep   = t.get("departure", "")
-            arr   = t.get("arrival", "")
-            dur   = t.get("duration", "")
-            frm   = t.get("fromStation", "")
-            to    = t.get("toStation", "")
-            avail = t.get("availability", {})
-            avail_str = ""
-            if isinstance(avail, dict):
-                if avail.get("available"):
-                    avail_str = f" | AVBL-{avail.get('count', '?')}"
-                elif avail.get("status") == "WL":
-                    avail_str = f" | WL#{avail.get('count', '?')}"
-                elif avail.get("status") == "RAC":
-                    avail_str = f" | RAC {avail.get('count', '?')}"
-                else:
-                    avail_str = " | NOT AVBL"
-            lines.append(f"  • {num} {name} | {frm} {dep}→{to} {arr} ({dur}){avail_str}")
+            num  = t.get("trainNumber", "?")
+            name = t.get("trainName", "")
+            frm  = t.get("fromStation", "")
+            to   = t.get("toStation", "")
+            dep  = t.get("departure", "")
+            arr  = t.get("arrival", "")
+            dur  = t.get("duration", "")
+            lines.append(f"  {num} {name} | {frm} {dep} → {to} {arr} ({dur})")
 
     sel = state.get("selected_train")
     if not sel and trains and len(trains) == 1:
         sel = trains[0]
     if sel:
         journey_date = sel.get("journeyDate", "")
-        date_str = (
-            f" | journeyDate={journey_date}"
-            if journey_date
-            else " | journeyDate=UNKNOWN (call check_availability first)"
-        )
         lines.append(
-            f"- Selected train: {sel.get('trainNumber')} {sel.get('trainName', '')} "
-            f"({sel.get('fromStation')}→{sel.get('toStation')}{date_str}) — "
-            f"use these values directly for book_ticket."
+            f"Selected train: {sel.get('trainNumber')} {sel.get('trainName', '')} "
+            f"({sel.get('fromStation')} → {sel.get('toStation')}"
+            + (f", {journey_date}" if journey_date else "")
+            + ")"
         )
 
     avail = state.get("availability")
     if avail and isinstance(avail, dict):
-        status_str = avail.get("status") or ("AVBL" if avail.get("available") else "N/A")
+        status_str = avail.get("status") or ("available" if avail.get("available") else "not available")
         count = avail.get("count", "")
         cls   = avail.get("travelClass", "")
         lines.append(
-            f"- Availability already checked: {cls} {status_str}"
-            + (f" ({count} seats)" if count else "")
+            f"Availability checked: {cls} {status_str}"
+            + (f", {count} seats" if count else "")
         )
 
     fares_map: Dict[str, Any] = persistent.get("fares") or {}
@@ -281,27 +383,48 @@ def _build_context(state: Dict[str, Any]) -> str:
         cls = single_fare.get("travelClass") or "?"
         fares_map = {cls: single_fare}
     if fares_map:
-        fare_train = ""
-        fare_lines = []
+        fare_parts = []
         for cls, f in sorted(fares_map.items()):
             if isinstance(f, dict):
                 breakdown = f.get("breakdown") or {}
                 total = breakdown.get("total") or f.get("amount") or "?"
-                fare_train = f.get("trainNumber", fare_train)
-                fare_lines.append(f"    {cls}: ₹{total}")
-        if fare_lines:
-            lines.append(
-                f"- Fares already fetched for train {fare_train} "
-                f"(do NOT call get_fare again for these classes):"
+                fare_parts.append(f"{cls}=₹{total}")
+        if fare_parts:
+            fare_train = next(
+                (f.get("trainNumber") for f in fares_map.values() if isinstance(f, dict) and f.get("trainNumber")),
+                "?"
             )
-            lines.extend(fare_lines)
+            lines.append(f"Fares for train {fare_train}: {', '.join(fare_parts)}")
 
     booking = state.get("booking")
+    pending_intent: Optional[str] = state.get("pending_intent")
     if booking and isinstance(booking, dict):
-        pnr     = booking.get("pnr", "")
-        status_b = booking.get("status", "")
-        train   = booking.get("trainNumber", "")
-        lines.append(f"- Active booking: PNR {pnr} | train {train} | status {status_b}")
+        suppress = pending_intent in ("cancel_ticket", "update_booking")
+        if not suppress and booking.get("pnr"):
+            lines.append(
+                f"Last booking result: PNR {booking['pnr']} | "
+                f"train {booking.get('trainNumber', '?')} | "
+                f"status {booking.get('status', '?')}"
+            )
+        elif suppress and booking.get("pnr"):
+            lines.append(f"Booking to act on: PNR {booking['pnr']}")
+
+    # ── Mid-collection state ──────────────────────────────────────────────────
+    collected: Dict[str, Any] = state.get("collected_slots") or {}
+    if pending_intent:
+        lines.append(f"Currently collecting details for: {pending_intent}")
+        if collected:
+            for k, v in collected.items():
+                label = _slot_label_from_schema(k, pending_intent, cache)
+                lines.append(f"  Already have — {label}: {v}")
+        missing = _missing_slots(pending_intent, collected, cache)
+        if missing:
+            labels = [_slot_label_from_schema(s, pending_intent, cache) for s in missing]
+            lines.append(f"  Still needed: {', '.join(labels)}")
+
+    # ── Previous turn tool summary ────────────────────────────────────────────
+    if last_turn_summary:
+        lines.append(last_turn_summary)
 
     return "\n".join(lines)
 
@@ -338,13 +461,28 @@ def _extract_collected_slots(
     if not collected.get("quota"):
         collected["quota"] = "GN"
 
-    # Fill pnr from active booking in state (for cancel/update flows)
+    # Fill pnr from the most recent booking (for cancel/update flows)
     if not collected.get("pnr"):
+        # 1. Try the most recent booking result in state (may be None after turn reset)
         booking = state.get("booking") or {}
         if booking.get("pnr"):
             collected["pnr"] = booking["pnr"]
-        else:
-            # Check booking history for the most recent PNR
+        # 2. Try persistent last_booking (survives turn resets)
+        if not collected.get("pnr"):
+            last = (state.get("persistent_results") or {}).get("last_booking") or {}
+            if last.get("pnr"):
+                collected["pnr"] = last["pnr"]
+        # 3. Try scanning the latest user message for a 10-digit PNR
+        #    — handles "cancel PNR 1234567890" without needing history fetch
+        if not collected.get("pnr"):
+            for msg in reversed(state.get("messages", [])):
+                if msg.__class__.__name__ == "HumanMessage":
+                    m = re.search(r"\b(\d{10})\b", str(msg.content))
+                    if m:
+                        collected["pnr"] = m.group(1)
+                    break
+        # 4. Fallback: booking history when there's exactly one booking
+        if not collected.get("pnr"):
             history = (state.get("persistent_results") or {}).get("get_booking_history") or []
             if len(history) == 1:
                 collected["pnr"] = history[0].get("pnr", "")
@@ -352,6 +490,9 @@ def _extract_collected_slots(
     # Fill passengers from saved list if user referred to them
     if not collected.get("passengers"):
         saved = (state.get("persistent_results") or {}).get("get_saved_passengers") or []
+        # Defensive: handle dict stored in checkpoint from old code version
+        if isinstance(saved, dict):
+            saved = saved.get("passengers") or []
         if len(saved) == 1:
             # Only one saved passenger — use automatically
             p = saved[0]
@@ -379,6 +520,22 @@ _CLASS_RE   = re.compile(r"\b(SL|2S|CC|3E|3A|2A|1A|EC)\b", re.IGNORECASE)
 _DATE_RE    = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _STATION_RE = re.compile(r"\b([A-Z]{2,5})\b")   # station codes like BRC, NDLS, KOTA
 
+# Berth preference aliases → normalised IRCTC codes
+_BERTH_ALIASES: Dict[str, str] = {
+    "lb": "LB", "lower": "LB", "lower berth": "LB",
+    "mb": "MB", "middle": "MB", "middle berth": "MB",
+    "ub": "UB", "upper": "UB", "upper berth": "UB",
+    "sl": "SL", "side lower": "SL", "side lower berth": "SL",
+    "sub": "SUB", "su": "SUB", "side upper": "SUB", "side upper berth": "SUB",
+    "ws": "WS", "window": "WS", "window seat": "WS",
+    "no preference": "LB",  # treat "no preference" as LB (common default)
+}
+# Regex that matches any of the alias keys (longest first to avoid short hits)
+_BERTH_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_BERTH_ALIASES, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
 
 def _gender_normalised(raw: str) -> str:
     raw = raw.strip().upper()
@@ -393,6 +550,7 @@ def _extract_slots_from_messages(
     tool_name: str,
     collected: Dict[str, Any],
     messages: List[Any],
+    cache: Optional["SchemaCache"] = None,
 ) -> Dict[str, Any]:
     """
     Scan the last few HumanMessages to fill any still-missing slots for
@@ -403,7 +561,7 @@ def _extract_slots_from_messages(
     Only writes slots that are genuinely missing so existing values are
     never overwritten.
     """
-    missing = set(_missing_slots(tool_name, collected))
+    missing = set(_missing_slots(tool_name, collected, cache))
     if not missing:
         return collected
 
@@ -488,6 +646,14 @@ def _extract_slots_from_messages(
                 updated["travelClass"] = cm.group(1).upper()
                 break
 
+    # ── Berth preference (add_saved_passenger) ───────────────────────────────
+    if tool_name == "add_saved_passenger" and "berthPreference" in missing:
+        for text in recent_human:
+            bm = _BERTH_RE.search(text)
+            if bm:
+                updated["berthPreference"] = _BERTH_ALIASES[bm.group(1).lower()]
+                break
+
     # ── Journey date ─────────────────────────────────────────────────────────
     if "journeyDate" in missing:
         for text in recent_human:
@@ -536,6 +702,87 @@ def _grounded_pnrs(state: Dict[str, Any]) -> set:
         default=str,
     )
     return set(_PNR_RE.findall(blob))
+
+
+def _summarize_last_turn_tools(state: Dict[str, Any]) -> str:
+    """
+    Summarize tool results from the previous turn into a compact text block.
+    
+    This preserves useful context (train numbers, PNRs, availability) without
+    sending full JSON payloads to the LLM every turn.
+    
+    Returns empty string if no tools were called in the last turn.
+    """
+    tool_history = state.get("tool_history") or []
+    if not tool_history:
+        return ""
+    
+    lines = ["Previous turn summary:"]
+    
+    for h in tool_history[-6:]:  # Last 6 tools only
+        tool = h.get("tool", "?")
+        status = h.get("status", "unknown")
+        result = h.get("result")
+        
+        if status == "failed":
+            lines.append(f"  - {tool}: failed")
+            continue
+        
+        # Tool-specific summarization
+        if tool == "search_trains" or tool == "recommend_trains":
+            if isinstance(result, list) and result:
+                count = len(result)
+                train_nums = ", ".join(str(t.get("trainNumber", "?")) for t in result[:3])
+                lines.append(f"  - {tool}: found {count} trains ({train_nums}...)")
+            elif isinstance(result, dict) and result.get("trains"):
+                trains = result["trains"]
+                count = len(trains)
+                train_nums = ", ".join(str(t.get("trainNumber", "?")) for t in trains[:3])
+                lines.append(f"  - {tool}: found {count} trains ({train_nums}...)")
+            else:
+                lines.append(f"  - {tool}: no trains found")
+        
+        elif tool == "check_availability":
+            if isinstance(result, dict):
+                status_str = "available" if result.get("available") else "not available"
+                cls = result.get("travelClass", "?")
+                count = result.get("count", "")
+                lines.append(f"  - {tool}: {cls} {status_str}" + (f" ({count} seats)" if count else ""))
+        
+        elif tool == "get_fare":
+            if isinstance(result, dict):
+                amount = result.get("amount") or (result.get("breakdown") or {}).get("total")
+                cls = result.get("travelClass", "?")
+                lines.append(f"  - {tool}: {cls} ₹{amount}")
+        
+        elif tool == "book_ticket":
+            if isinstance(result, dict) and result.get("pnr"):
+                pnr = result["pnr"]
+                train = result.get("trainNumber", "?")
+                lines.append(f"  - {tool}: booked PNR {pnr} on train {train}")
+        
+        elif tool == "get_booking_history":
+            if isinstance(result, list):
+                if result:
+                    count = len(result)
+                    pnrs = ", ".join(b.get("pnr", "?") for b in result[:3])
+                    lines.append(f"  - {tool}: {count} past bookings ({pnrs}...)")
+                else:
+                    lines.append(f"  - {tool}: no past bookings")
+        
+        elif tool == "get_saved_passengers":
+            if isinstance(result, list):
+                if result:
+                    names = ", ".join(p.get("name", "?") for p in result)
+                    lines.append(f"  - {tool}: {len(result)} saved ({names})")
+                else:
+                    lines.append(f"  - {tool}: no saved passengers")
+        
+        else:
+            # Generic summary for other tools
+            lines.append(f"  - {tool}: success")
+    
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _ground_reply(reply: str, state: Dict[str, Any]) -> str:
@@ -645,35 +892,76 @@ async def agent_node(
             "collected_slots": None,
         }
 
+    # ── Compress message history at the start of a new user turn ────────────
+    # Instead of dropping all tool call history (which loses useful context),
+    # we:
+    # 1. Summarize the previous turn's tool results into a compact text block
+    # 2. Keep HumanMessages and text-only AIMessages (final answers)
+    # 3. Drop raw ToolMessages and AIMessages that are pure tool_call stubs
+    #    (empty content + tool_calls) — these confuse the LLM with orphaned
+    #    call IDs and raw JSON that is already summarized in the context block
+    last_turn_summary = ""
+    if is_new_turn:
+        messages_raw = state.get("messages", [])
+
+        # Build a compact summary of what tools ran last turn BEFORE stripping.
+        # Stored in a local var — injected into the session context message
+        # (not back into the message list) so chat.py never picks it up as a reply.
+        last_turn_summary = _summarize_last_turn_tools(state)
+
+        cleaned = []
+        for msg in messages_raw:
+            if isinstance(msg, HumanMessage):
+                cleaned.append(msg)
+            elif isinstance(msg, AIMessage):
+                content = getattr(msg, "content", None)
+                if content and str(content).strip():
+                    # Final answer message — keep text only, drop tool_calls
+                    cleaned.append(AIMessage(
+                        content=str(content).strip(),
+                        id=getattr(msg, "id", None),
+                    ))
+                # Pure tool-dispatch AIMessages (no content) are dropped
+            # ToolMessages are dropped — their data lives in persistent_results
+            # and is surfaced via the session context block if still relevant
+
+        state = {**state, "messages": cleaned}
+
     feedback = state.get("reflection_feedback") or ""
     feedback_block = (
         f"\n[Note: your previous answer was incomplete — {feedback}. Please fix this.]"
         if feedback else ""
     )
 
+    # ── Per-request schema cache ─────────────────────────────────────────────
+    # Built once here, used by every helper below, discarded when this call
+    # returns.  No cross-request state, no manual invalidation needed.
+    cache = SchemaCache(mcp_registry)
+
     # ── Pre-enrich collected_slots from conversation history ─────────────────
-    # Do this BEFORE building the context block so the system prompt shows the
-    # LLM an accurate picture of what's already been collected.  Without this,
-    # the context says "still need name/age/gender" even when the user just
-    # provided them in the previous message, causing the LLM to ask again.
     active_intent_pre: Optional[str] = state.get("pending_intent")
     if active_intent_pre:
         pre_slots = _extract_collected_slots(active_intent_pre, {}, state)
         pre_slots = _extract_slots_from_messages(
-            active_intent_pre, pre_slots, state.get("messages", [])
+            active_intent_pre, pre_slots, state.get("messages", []), cache
         )
         # Temporarily patch state view for context building only — we do NOT
         # write back to state here; that happens in the no-tool-calls branch.
         state = {**state, "collected_slots": pre_slots}
 
-    tools: List[Dict[str, Any]] = mcp_registry.get_tool_schemas() if mcp_registry else []
+    tools: List[Dict[str, Any]] = cache.get_tool_list()
 
     messages = _build_messages_for_llm(state)
-    system = _SYSTEM_TEMPLATE.format(
-        today=date.today().isoformat(),
-        context=_build_context(state),
-        feedback=feedback_block,
-    )
+
+    # Prepend a session context message so dynamic data (date, user email,
+    # session state) stays OUT of the static system prompt and is visible
+    # in LangSmith traces as a separate, clearly-labelled context message.
+    # We inject this as a system-role message so it doesn't pollute the
+    # assistant turn history and can never be mistaken for a real reply.
+    session_ctx = _build_session_context_message(state, cache, last_turn_summary=last_turn_summary)
+    messages = [{"role": "system", "content": session_ctx}, *messages]
+
+    system = _SYSTEM_TEMPLATE.format(feedback=feedback_block)
 
     response = await llm_service.chat_raw(
         messages=messages,
@@ -687,70 +975,53 @@ async def agent_node(
     msg = response.choices[0].message
     raw_tool_calls = msg.tool_calls or []
 
-    reset_fields: Dict[str, Any] = {"tool_history": [], "errors": []} if is_new_turn else {}
+    reset_fields: Dict[str, Any] = {
+        "tool_history": [],
+        "errors": [],
+        "reflection_required": False,
+        "reflection_passed": False,
+        "reflection_feedback": "",
+        "reflection_retries": 0,
+        "reflection_tool_offset": 0,
+        "reflection_tool_snapshot": None,
+        # ── Turn-scoped travel context ────────────────────────────────────────
+        # Clear all search/booking context at the start of every new user turn.
+        # These fields belong to the previous intent and must not bleed into the
+        # next one (e.g. booking search results polluting a cancel flow).
+        # persistent_results (booking history, saved passengers) is intentionally
+        # NOT cleared — it survives the full conversation by design.
+        "search_results":  None,
+        "ranked_results":  None,
+        "selected_train":  None,
+        "availability":    None,
+        "fare":            None,
+        "booking":         None,  # last booking result — clear so old bookings don't pollute new intents
+        "pending_intent":  None,
+        "collected_slots": None,
+        "pending_tool_calls":  [],
+        "confirmed":           None,
+        "confirmation_prompt": None,  # clear stale prompt so cancel/update flows never show the previous booking prompt
+    } if is_new_turn else {}
 
-    # ── Intent guardrail — veto mutating tool calls the user didn't request ──
-    # On the very first agent loop of a new turn (loop_count == 1) we have the
-    # latest user message at hand and can check whether the user actually asked
-    # for a write action.  If the model hallucinated a call to book_ticket,
-    # add_saved_passenger, cancel_ticket, etc. without an explicit user trigger,
-    # we strip those calls and let the model produce a text reply instead.
-    # This is a defense-in-depth layer on top of the system prompt rules.
-    #
-    # EXCEPTION: if state already has an active pending_intent for this tool,
-    # the user is mid-collection and their reply is an answer to a question —
-    # not a new unprompted request.  Never veto those.
-    if raw_tool_calls and loop_count == 1:
-        latest_human = ""
-        for m in reversed(state.get("messages", [])):
-            if isinstance(m, HumanMessage):
-                latest_human = str(m.content).lower()
-                break
-
+    # ── Intent guardrail — block only clear hallucinations ───────────────────
+    # The LLM already understands user intent from the conversation — we don't
+    # re-evaluate it with keyword matching here.  The only thing we guard
+    # against is a write tool being called on loop_count > 1 when there is no
+    # active pending_intent (i.e. the model spontaneously re-fires a write tool
+    # mid-loop without the user asking again).  Mid-collection calls are always
+    # allowed because the user IS providing the requested information.
+    if raw_tool_calls and loop_count > 1:
         active_intent: Optional[str] = state.get("pending_intent")
-
         _WRITE_TOOLS = {
             "book_ticket", "cancel_ticket",
             "add_saved_passenger", "delete_saved_passenger",
             "update_booking",
         }
-        _BOOKING_TRIGGERS   = {
-            "book", "reserve", "buy ticket", "purchase ticket", "i want to book",
-            "i want to go with", "i want to travel", "i'll take", "i will take",
-            "let me book", "book it", "let's go with", "lets go with",
-            "i'll go with", "i will go with", "get me a ticket", "get a ticket",
-            "i want this train", "book this", "book the", "reserve the",
-            "take this", "i want to reserve",
-        }
-        _PASSENGER_TRIGGERS = {"add passenger", "save passenger", "add a passenger",
-                               "save a passenger", "new passenger", "add ryan",
-                               "save ryan", "add to my list", "save to my list"}
-        _CANCEL_TRIGGERS    = {"cancel", "cancellation"}
-
-        def _user_requested_write(tool_name: str) -> bool:
-            """Return True if the latest user message contains an intent trigger for this tool,
-            OR if the user is already mid-collection for this tool."""
-            # Mid-collection: the agent already asked the user for details — never block.
-            if active_intent == tool_name:
-                return True
-            if tool_name == "book_ticket":
-                return any(t in latest_human for t in _BOOKING_TRIGGERS)
-            if tool_name in ("add_saved_passenger", "delete_saved_passenger"):
-                return any(t in latest_human for t in _PASSENGER_TRIGGERS)
-            if tool_name == "cancel_ticket":
-                return any(t in latest_human for t in _CANCEL_TRIGGERS)
-            if tool_name == "update_booking":
-                return any(t in latest_human for t in {"update", "change", "modify", "boarding point"})
-            return True  # read-only / search tools are always allowed
-
-        filtered_calls = [
+        raw_tool_calls = [
             tc for tc in raw_tool_calls
-            if (tc.function.name not in _WRITE_TOOLS)
-               or _user_requested_write(tc.function.name)
+            if tc.function.name not in _WRITE_TOOLS
+            or active_intent == tc.function.name
         ]
-
-        if len(filtered_calls) < len(raw_tool_calls):
-            raw_tool_calls = filtered_calls
 
     # ── No tool calls → question or final answer ─────────────────────────────
     if not raw_tool_calls:
@@ -781,9 +1052,9 @@ async def agent_node(
             # just provided (e.g. "Kevin 22 MALE" after being asked for name).
             refreshed_slots = _extract_collected_slots(existing_intent, {}, state)
             refreshed_slots = _extract_slots_from_messages(
-                existing_intent, refreshed_slots, state.get("messages", [])
+                existing_intent, refreshed_slots, state.get("messages", []), cache
             )
-            missing_now = _missing_slots(existing_intent, refreshed_slots)
+            missing_now = _missing_slots(existing_intent, refreshed_slots, cache)
             if missing_now:
                 # Still waiting for more info — keep intent alive.
                 updates["pending_intent"]  = existing_intent
@@ -815,32 +1086,35 @@ async def agent_node(
                     "collected_slots":    None,
                 }
         else:
-            # No active intent — check whether this reply is starting a new
-            # collection (agent asked for booking/cancellation details).
-            reply_lower = reply.lower()
+            # No active intent — the LLM produced a text reply on a fresh turn.
+            # Derive the intended tool directly from what the LLM tried to call
+            # (if it made a tool call that got stripped by the guardrail, or if
+            # it asked a clarifying question before calling anything).
+            # We read this from the raw OpenAI response's tool_calls before the
+            # guardrail may have emptied raw_tool_calls.
+            # Since we're in the no-tool-calls branch, check the original msg.
             inferred_intent: Optional[str] = None
-            if any(w in reply_lower for w in ("book", "booking", "reserve", "ticket")):
-                inferred_intent = "book_ticket"
-            elif any(w in reply_lower for w in ("cancel", "cancellation")):
-                inferred_intent = "cancel_ticket"
-            elif any(w in reply_lower for w in ("availability", "available seats", "check seat")):
-                inferred_intent = "check_availability"
-            elif any(w in reply_lower for w in ("live status", "running status", "train status")):
-                inferred_intent = "get_live_status"
-            elif any(w in reply_lower for w in ("reminder",)):
-                inferred_intent = "create_reminder"
-            elif any(w in reply_lower for w in ("save", "add", "passenger")):
-                inferred_intent = "add_saved_passenger"
-            elif any(w in reply_lower for w in ("boarding point", "boarding station", "newboardingstation",
-                                                  "board from", "board at")):
-                inferred_intent = "update_booking"
+            _WRITE_TOOLS_SET = {
+                "book_ticket", "cancel_ticket",
+                "add_saved_passenger", "delete_saved_passenger",
+                "update_booking", "check_availability", "get_live_status",
+                "create_reminder",
+            }
+            # The LLM may have emitted a partial tool call before asking — check
+            # the original message tool_calls (msg.tool_calls, not raw_tool_calls
+            # which may have been filtered).
+            original_calls = msg.tool_calls or []
+            for tc in original_calls:
+                if tc.function.name in _WRITE_TOOLS_SET:
+                    inferred_intent = tc.function.name
+                    break
 
             if inferred_intent:
                 seed_slots = _extract_collected_slots(inferred_intent, {}, state)
                 seed_slots  = _extract_slots_from_messages(
-                    inferred_intent, seed_slots, state.get("messages", [])
+                    inferred_intent, seed_slots, state.get("messages", []), cache
                 )
-                missing_now = _missing_slots(inferred_intent, seed_slots)
+                missing_now = _missing_slots(inferred_intent, seed_slots, cache)
                 if missing_now:
                     updates["pending_intent"]  = inferred_intent
                     updates["collected_slots"] = seed_slots
@@ -851,8 +1125,22 @@ async def agent_node(
                 updates["pending_intent"]  = None
                 updates["collected_slots"] = None
 
-        if state.get("tool_history") and not state.get("reflection_passed"):
+        # Only trigger reflection when:
+        # 1. Tools actually ran this turn (tool_history is non-empty)
+        # 2. The agent produced a genuine text reply (reply is non-empty)
+        # 3. Reflection hasn't already passed this turn
+        # Do NOT trigger if reply is empty — that means the agent is mid-flow
+        # (e.g. just produced a slot-filling clarification with no real answer yet)
+        tool_history_now: list = state.get("tool_history") or []
+        if tool_history_now and reply and not state.get("reflection_passed"):
             updates["reflection_required"] = True
+            # Tell reflection_node exactly which tools are relevant to this
+            # final reply — only the most recent batch (last executor run),
+            # not all tools accumulated across the whole turn.
+            # We identify the last batch as entries added after the previous
+            # agent loop count, tracked via reflection_tool_offset.
+            offset = state.get("reflection_tool_offset") or 0
+            updates["reflection_tool_snapshot"] = tool_history_now[offset:]
 
         return updates
 
@@ -884,17 +1172,15 @@ async def agent_node(
     resolved_slots = _extract_collected_slots(
         first_tool, pending[0]["args"], state
     )
-    missing = _missing_slots(first_tool, resolved_slots)
+    missing = _missing_slots(first_tool, resolved_slots, cache)
 
     slot_updates: Dict[str, Any] = {
-        # If the model is calling the tool, intent is being fulfilled — clear it.
         "pending_intent":  None,
         "collected_slots": None,
     }
 
     # Edge case: model emitted a tool call but args are still incomplete
-    # (shouldn't happen after prompt fix, but guard anyway — don't clear intent).
-    if missing and first_tool in _TOOL_REQUIRED_SLOTS:
+    if missing and first_tool in cache.known_tool_names():
         slot_updates["pending_intent"]  = first_tool
         slot_updates["collected_slots"] = resolved_slots
 
@@ -909,7 +1195,7 @@ async def agent_node(
         # Preserve the pending intent and merge slot data from conversation
         surviving_slots = _extract_collected_slots(existing_pi, {}, state)
         surviving_slots = _extract_slots_from_messages(
-            existing_pi, surviving_slots, state.get("messages", [])
+            existing_pi, surviving_slots, state.get("messages", []), cache
         )
         slot_updates["pending_intent"]  = existing_pi
         slot_updates["collected_slots"] = surviving_slots
@@ -953,9 +1239,11 @@ async def agent_node(
 
     return {
         "messages": [ai_msg],
-        "pending_tool_calls": pending,
-        "agent_loop_count": loop_count,
         **reset_fields,
         **slot_updates,
         **early_updates,
+        # These must come last — reset_fields contains "pending_tool_calls": []
+        # which would overwrite the real pending list if it came after.
+        "pending_tool_calls": pending,
+        "agent_loop_count": loop_count,
     }

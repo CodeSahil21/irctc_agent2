@@ -209,17 +209,21 @@ async def run_agent(
 
     messages = result.get("messages", [])
     reply = ""
-    for msg in reversed(messages):
-        # Skip HumanMessages and AIMessages that only contain tool_calls with no
-        # visible text (content is None, empty string, or whitespace-only).
-        # These are intermediate "thinking" turns, not the final answer.
+
+    from langchain_core.messages import ToolMessage as _ToolMessage
+
+    last_human_idx = -1
+    for i, msg in enumerate(messages):
         if isinstance(msg, HumanMessage):
+            last_human_idx = i
+    current_turn = messages[last_human_idx + 1:] if last_human_idx >= 0 else messages
+    for msg in reversed(current_turn):
+        if isinstance(msg, (HumanMessage, _ToolMessage)):
             continue
-        content = getattr(msg, "content", None)
-        if not content or not str(content).strip():
-            continue
-        reply = str(content).strip()
-        break
+        c = getattr(msg, "content", None)
+        if c and str(c).strip():
+            reply = str(c).strip()
+            break
 
     if request.user_email and not request.resume:
         await conv_manager.save_turn(

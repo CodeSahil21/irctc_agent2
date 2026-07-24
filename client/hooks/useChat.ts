@@ -16,6 +16,20 @@ const WELCOME: ChatMessage = {
         "Namaste! I'm your IRCTC assistant. Ask me to check PNR status, find trains between stations, or check seat availability.",
 };
 
+/**
+ * Get or create a stable conversation ID that persists across page reloads
+ * and socket reconnects.  Stored in sessionStorage so it resets on a new
+ * browser tab (intentional — a new tab = a new conversation).
+ */
+function getOrCreateConversationId(): string {
+    const key = "irctc_conv_id";
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const fresh = `conv-${nanoid(8)}`;
+    sessionStorage.setItem(key, fresh);
+    return fresh;
+}
+
 export interface ToolProgress {
     tool: string;
     index: number;
@@ -32,6 +46,10 @@ export function useChat() {
     const [interrupt, setInterrupt] = useState<InterruptPayload | null>(null);
 
     const streamingIdRef = useRef<string | null>(null);
+    // Stable conversation ID — same across reconnects for this browser session
+    const conversationIdRef = useRef<string>(getOrCreateConversationId());
+    // In-flight guard — prevents sending while agent is processing
+    const isProcessingRef = useRef<boolean>(false);
 
     useEffect(() => {
         if (!socket) return;
@@ -44,7 +62,10 @@ export function useChat() {
 
         const onTyping = ({ isTyping }: { isTyping: boolean }) => {
             setIsAgentTyping(isTyping);
-            if (!isTyping) setToolProgress(null);
+            if (!isTyping) {
+                setToolProgress(null);
+                isProcessingRef.current = false;
+            }
         };
 
         const onToolStart = (payload: ToolProgressPayload) => {
@@ -106,6 +127,7 @@ export function useChat() {
 
         const onComplete = ({ message }: { message: ChatMessage }) => {
             streamingIdRef.current = null;
+            isProcessingRef.current = false;
             setMessages((prev) => {
                 const exists = prev.some((m) => m.id === message.id);
                 if (!exists) return [...prev, { ...message, status: "sent" }];
@@ -118,6 +140,7 @@ export function useChat() {
         };
 
         const onError = ({ id, error }: { id: string; error: string }) => {
+            isProcessingRef.current = false;
             setMessages((prev) =>
                 prev.map((m) =>
                     m.id === id ? { ...m, status: "error", content: error } : m,
@@ -128,11 +151,9 @@ export function useChat() {
         };
 
         const onInterrupt = (payload: InterruptPayload) => {
+            isProcessingRef.current = false;
             setIsAgentTyping(false);
             setToolProgress(null);
-            // Add the confirmation prompt as an agent message bubble so the
-            // conversation flow looks natural (user sees what's about to happen
-            // inline, not just in the floating dialog).
             setMessages((prev) => [
                 ...prev,
                 {
@@ -176,6 +197,10 @@ export function useChat() {
             const trimmed = content.trim();
             if (!trimmed) return;
 
+            // In-flight guard: ignore if a response is still in progress
+            if (isProcessingRef.current) return;
+
+            isProcessingRef.current = true;
             const id = nanoid();
             setMessages((prev) => [
                 ...prev,
@@ -188,7 +213,12 @@ export function useChat() {
                 },
             ]);
             setIsAgentTyping(true);
-            socket.emit("query:send", { id, content: trimmed });
+            // Send stable conversationId so reconnects restore the same LangGraph thread
+            socket.emit("query:send", {
+                id,
+                content: trimmed,
+                conversationId: conversationIdRef.current,
+            });
         },
         [socket],
     );
@@ -196,8 +226,8 @@ export function useChat() {
     const sendResume = useCallback(
         (approved: boolean) => {
             if (!socket) return;
-
             if (!interrupt) return;
+            isProcessingRef.current = true;
             socket.emit("resume", { id: interrupt.id, approved });
             setInterrupt(null);
             setIsAgentTyping(true);

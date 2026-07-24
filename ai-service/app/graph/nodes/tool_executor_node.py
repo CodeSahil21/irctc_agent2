@@ -30,9 +30,59 @@ _PERSISTENT_TOOLS = {"get_booking_history", "get_saved_passengers"}
 _TRAIN_DROP_KEYS = frozenset({
     "stations", "schedule", "stoppages", "halts",
     "route", "coaches", "coachComposition", "runningDays",
+    # These embed a single class's fare/availability chosen by the MCP server —
+    # stripping them prevents the LLM from pre-deciding the travel class.
+    # The agent should show all available classes or ask the user.
+    "fare", "availability",
 })
 
 _TIMEOUT_SECONDS = 15.0
+
+
+def _normalize_empty_result(tool_name: str, data: Any) -> Any:
+    """
+    Normalize empty results ([], None, {}) into human-readable messages
+    so the LLM has something meaningful to say instead of silence.
+    """
+    if tool_name == "get_saved_passengers":
+        if not data or (isinstance(data, list) and len(data) == 0):
+            return {
+                "status": "success",
+                "message": "You don't have any saved passengers yet. You can add one using the add_saved_passenger tool.",
+                "passengers": [],
+            }
+    
+    if tool_name == "get_booking_history":
+        if not data or (isinstance(data, list) and len(data) == 0):
+            return {
+                "status": "success",
+                "message": "You don't have any past bookings yet.",
+                "bookings": [],
+            }
+    
+    if tool_name in ("search_trains", "recommend_trains"):
+        if isinstance(data, list) and len(data) == 0:
+            return {
+                "status": "success",
+                "message": "No trains found for the specified route and date. Try a different date or nearby stations.",
+                "trains": [],
+            }
+        if isinstance(data, dict) and not data.get("trains"):
+            return {
+                "status": "success",
+                "message": "No trains found for the specified route and date. Try a different date or nearby stations.",
+                "trains": [],
+            }
+    
+    if tool_name == "check_availability":
+        if not data or not isinstance(data, dict):
+            return {
+                "status": "success",
+                "message": "Availability information is not available for this train and date.",
+                "available": False,
+            }
+    
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +299,9 @@ async def tool_executor_node(
             ))
             continue
 
+        # ── Normalize empty results into readable messages ───────────────────
+        data = _normalize_empty_result(name, data)
+
         # ── Post-process successful results ─────────────────────────────────
         payload = data
 
@@ -315,20 +368,29 @@ async def tool_executor_node(
             "update_booking", "update_booking_status", "update_boarding_point",
         ):
             compat["booking"] = payload
+            # Also persist a slim copy of the booking so the PNR survives
+            # across turns (state["booking"] is cleared at new-turn reset).
+            # This lets cancel/update flows find the PNR without re-fetching
+            # booking history.
+            if name == "book_ticket" and isinstance(payload, dict) and payload.get("pnr"):
+                persistent["last_booking"] = _slim_booking(payload)
 
         elif name == "get_booking_history":
-            raw_list = payload if isinstance(payload, list) else []
-            slim_list = [_slim_booking(b) for b in raw_list if isinstance(b, dict)]
+            raw_list = payload if isinstance(payload, list) else (payload.get("bookings") if isinstance(payload, dict) else [])
+            slim_list = [_slim_booking(b) for b in (raw_list or []) if isinstance(b, dict)]
             persistent["get_booking_history"] = slim_list
-            payload = slim_list
+            payload = payload if isinstance(payload, dict) else slim_list  # keep normalized message if present
 
         elif name == "get_saved_passengers":
-            result_list = payload if isinstance(payload, list) else []
+            raw_list = payload if isinstance(payload, list) else (payload.get("passengers") if isinstance(payload, dict) else [])
+            result_list = raw_list or []
             persistent["get_saved_passengers"] = result_list
 
-        # Persist long-lived results by tool name
-        if name in _PERSISTENT_TOOLS:
-            persistent[name] = payload
+        # Persist long-lived results by tool name — always store the raw list,
+        # not the normalized dict, so session context iteration stays consistent.
+        # Note: get_booking_history and get_saved_passengers are already persisted
+        # correctly in their elif branches above with the raw list — no need to
+        # overwrite them here with potentially-normalized dict payloads.
 
         tool_history.append({
             "id": call_id,
@@ -347,6 +409,9 @@ async def tool_executor_node(
         "messages": tool_messages,
         "pending_tool_calls": [],
         "tool_history": tool_history,
+        # Record how many tools existed before this batch so reflection_node
+        # can slice tool_history[offset:] to get only the current loop's tools.
+        "reflection_tool_offset": len(tool_history) - len(pending),
         "persistent_results": persistent,
         "errors": errors,
         **compat,
