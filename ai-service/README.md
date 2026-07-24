@@ -1,585 +1,880 @@
-# ai-service
+# IRCTC AI Agent
 
-FastAPI + LangGraph orchestration layer for the IRCTC AI assistant. This service owns the AI runtime: tool planning, MCP tool execution, train ranking, human approval interrupts, reflection, conversation persistence, and Socket.IO streaming.
-
-> **Stack:** OpenAI (`gpt-4o-mini`) · LangGraph · MCP Streamable HTTP · MongoDB · Socket.IO
+A full-stack AI-powered travel assistant for Indian Railways. Users chat in natural language to search trains, check availability, compare fares, book and cancel tickets, set reminders, and manage passenger profiles — all through a conversational interface backed by live IRCTC data.
 
 ---
 
-## Mental model
+## Services at a Glance
 
-> OpenAI decides **what** to do. Python decides **how** to do it. MCP provides the live tool capabilities. LangGraph keeps the whole interaction stateful, resumable, and observable.
-
----
-
-## Tech stack
-
-| Layer | Technology |
-|---|---|
-| HTTP API | FastAPI |
-| Realtime | python-socketio (AsyncServer, ASGI-mounted) |
-| Orchestration | LangGraph (`StateGraph` + `MongoDBSaver` checkpointer) |
-| LLM | OpenAI via `openai` SDK (`gpt-4o-mini` default) |
-| Tool protocol | MCP Streamable HTTP (JSON-RPC 2.0) |
-| Database | MongoDB (Motor async driver + pymongo for checkpointer) |
-| Tracing | LangSmith (`wrap_openai`) |
-| Logging | Loguru |
+| Service            | Tech                                              | Port | Role              |
+| ------------------ | ------------------------------------------------- | ---- | ----------------- |
+| `client`           | Next.js 16 · React 19 · Redux Toolkit · Socket.IO | 3000 | Chat UI           |
+| `ai-service`       | FastAPI · LangGraph · OpenAI · MongoDB            | 8000 | AI orchestration  |
+| `auth-service`     | Express 5 · Prisma · PostgreSQL · Redis · JWT     | 4000 | Auth & sessions   |
+| `mcp_server_irctc` | Node.js · MCP SDK · Prisma · PostgreSQL           | 3001 | IRCTC tool server |
 
 ---
 
-## Architecture overview
+## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                          ai-service                             │
-│                                                                 │
-│  ┌──────────┐   ┌──────────────┐   ┌───────────────────────┐   │
-│  │ Socket.IO│   │  FastAPI HTTP │   │   LangGraph agent     │   │
-│  │  server  │──▶│  /api/v1     │──▶│   (4-node graph)      │   │
-│  └──────────┘   └──────────────┘   └───────────┬───────────┘   │
-│                                                 │               │
-│                  ┌──────────────────────────────┼──────────┐    │
-│                  │                              │          │    │
-│          ┌───────▼──────┐              ┌────────▼──────┐   │    │
-│          │  MCP Registry │              │  MongoDB      │   │    │
-│          │  (discovery + │              │  (motor +     │   │    │
-│          │   execution)  │              │  checkpointer)│   │    │
-│          └───────┬───────┘              └───────────────┘   │    │
-│                  │                                           │    │
-└──────────────────┼───────────────────────────────────────────┘   │
-                   │                                               │
-           ┌───────▼────────┐     ┌──────────────────┐            │
-           │ IRCTC MCP server│     │  LangSmith        │            │
-           │  (port 3000)   │     │  (tracing)        │            │
-           └────────────────┘     └──────────────────┘            │
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Client (Next.js)                           │
+│            REST  (/api/v1/agent)   ·   Socket.IO (real-time stream)     │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────────────┐
+│                           ai-service  :8000                             │
+│                                                                         │
+│   FastAPI HTTP  ──►  LangGraph StateGraph  ──►  MCP Registry            │
+│   Socket.IO     ──►  (4-node agent loop)   ──►  (tool execution)        │
+│                              │                                          │
+│           ┌──────────────────┼──────────────────┐                      │
+│           │                  │                  │                      │
+│      OpenAI LLM         MongoDB               LangSmith                │
+│      (gpt-4o-mini)   (Motor + pymongo)        (tracing)                │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │  JSON-RPC 2.0  (Streamable HTTP)
+┌──────────────────────────────▼──────────────────────────────────────────┐
+│                       mcp_server_irctc  :3001                           │
+│                                                                         │
+│   19 MCP tools  ──►  PostgreSQL (Prisma)  ──►  Redis (session cache)   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         auth-service  :4000                             │
+│                                                                         │
+│   Express 5  ──►  Prisma / PostgreSQL  ──►  Redis  ──►  JWT (HS256)    │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## LangGraph flow
+## LangGraph Agent Workflow
 
-Built in [`app/graph/builder.py`](app/graph/builder.py). Every user message runs through this 4-node graph.
+The core of `ai-service` is a 4-node `StateGraph` compiled in `app/graph/builder.py`. Every user message travels through this loop until a final answer is produced.
 
+```mermaid
+flowchart TD
+    START([▶ START]) --> A
+
+    A["🧠 agent_node\n─────────────────\n• Builds system prompt\n  with user context\n• Loads all live MCP\n  tool schemas\n• Calls OpenAI LLM\n• Emits tool_calls or\n  plain-text answer\n• Loop guard: MAX=8"]
+
+    A -- "pending_tool_calls\n+ any destructive?" --> H
+
+    A -- "pending_tool_calls\nnone destructive" --> T
+
+    A -- "no tool calls\n+ reflection_required" --> R
+
+    A -- "no tool calls\nno reflection" --> END1([⏹ END])
+
+    H["🔐 human_approval_node\n─────────────────\n• Calls LangGraph interrupt()\n• Suspends graph &\n  checkpoints to MongoDB\n• Awaits Command(resume=…)\n• Normalises: yes/y/ok/\n  confirm → True"]
+
+    H -- "confirmed = True" --> T
+
+    H -- "confirmed = False\n(injects cancelled\nToolMessages)" --> A
+
+    T["⚙️ tool_executor_node\n─────────────────\n• asyncio.gather all\n  pending_tool_calls\n• 15s per-tool timeout\n• Inline train ranking\n  (cheapest/fastest/\n  best_avail)\n• Persists history &\n  saved passengers\n• Appends to tool_history"]
+
+    T -- "always" --> A
+
+    R["🔍 reflection_node\n─────────────────\n• Fast path: skip LLM\n  if any tool failed\n• LLM quality check\n  (temp=0, max 300 tok)\n• reflect_on_results\n  function tool\n• Hard cap: 1 retry"]
+
+    R -- "passed OR\nretries ≥ 1" --> END2([⏹ END])
+
+    R -- "failed +\nretries < 1\n(injects feedback\ninto system prompt)" --> A
+
+    style START fill:#22c55e,color:#fff,stroke:none
+    style END1 fill:#ef4444,color:#fff,stroke:none
+    style END2 fill:#ef4444,color:#fff,stroke:none
+    style A fill:#3b82f6,color:#fff,stroke:#1d4ed8
+    style H fill:#f59e0b,color:#fff,stroke:#b45309
+    style T fill:#8b5cf6,color:#fff,stroke:#6d28d9
+    style R fill:#06b6d4,color:#fff,stroke:#0e7490
 ```
-START
-  │
-  ▼
-agent_node ──── has tool calls? ────────────────────────────┐
-  │                                                         │
-  │ destructive tool?          non-destructive tool?        │
-  ▼                                  │                      │
-human_approval_node                  │                      │
-  │                                  ▼                      │
-  │ confirmed?           tool_executor_node ◀───────────────┘
-  │     ▼                      │
-  │  tool_executor_node         │ (always returns to agent_node)
-  │                             ▼
-  │ declined?              agent_node
-  │     ▼
-  │  agent_node (relays cancellation)
-  │
-  │ no tool calls + reflection needed?
-  ▼
-reflection_node
-  │ passed / retries exhausted?  ──▶ END
-  │ failed, retries < 1          ──▶ agent_node (one retry with feedback)
-  │
-  └── (no tool calls, no reflection) ──▶ END
-```
 
-### Routing rules summary
+### Routing Rules
 
-| From node | Condition | To node |
-|---|---|---|
-| `agent_node` | pending tool calls + any destructive | `human_approval_node` |
-| `agent_node` | pending tool calls, none destructive | `tool_executor_node` |
-| `agent_node` | no pending calls + reflection needed | `reflection_node` |
-| `agent_node` | no pending calls | `END` |
-| `human_approval_node` | `confirmed=True` | `tool_executor_node` |
-| `human_approval_node` | `confirmed=False` | `agent_node` |
-| `tool_executor_node` | always | `agent_node` |
-| `reflection_node` | `reflection_passed=True` | `END` |
-| `reflection_node` | failed + `retries >= 1` | `END` |
-| `reflection_node` | failed + `retries < 1` | `agent_node` |
+| From                  | Condition                                | To                    |
+| --------------------- | ---------------------------------------- | --------------------- |
+| `agent_node`          | pending tool calls + any destructive     | `human_approval_node` |
+| `agent_node`          | pending tool calls, none destructive     | `tool_executor_node`  |
+| `agent_node`          | no pending calls + `reflection_required` | `reflection_node`     |
+| `agent_node`          | no pending calls                         | `END`                 |
+| `human_approval_node` | `confirmed = True`                       | `tool_executor_node`  |
+| `human_approval_node` | `confirmed = False`                      | `agent_node`          |
+| `tool_executor_node`  | always                                   | `agent_node`          |
+| `reflection_node`     | `reflection_passed = True`               | `END`                 |
+| `reflection_node`     | failed + `retries >= 1`                  | `END`                 |
+| `reflection_node`     | failed + `retries < 1`                   | `agent_node`          |
 
 ---
 
-## Node reference
+## Agent State (`TravelState`)
 
-### `agent_node`
-**File:** `app/graph/nodes/agent_node.py`
+`app/graph/state.py` — the full TypedDict that flows through every node.
 
-The single decision-making node. Replaces the previous multi-node pipeline (intent → slot filler → planner → response).
+```mermaid
+classDiagram
+    class TravelState {
+        +List~BaseMessage~ messages
+        +str conversation_id
+        +int turn_count
 
-On each invocation it:
-1. Builds a system prompt with user context (preferences, fetched booking count, saved passengers).
-2. Passes the full conversation history + all live MCP tool schemas to the LLM.
-3. If the model emits **tool calls** → stores them as `pending_tool_calls` and returns to the router.
-4. If the model emits **plain text** → that is the final answer; graph routes to `reflection_node` or `END`.
+        +str user_email
+        +str user_name
 
-Key behaviours:
-- **Loop guard:** `agent_loop_count` increments on every entry. At `MAX_LOOP=8` a safe fallback message is emitted and the loop resets.
-- **Parallel tool calls:** When the user asks to compare fares/availability across multiple trains, the model emits multiple tool calls in a single turn. `tool_executor_node` runs them concurrently via `asyncio.gather` — no special tagging required.
-- **PNR grounding:** `_ground_response()` scans the reply for 10-digit numbers and replaces any PNR not present in state data with `[PNR unavailable]`.
-- **Reflection gate:** Sets `reflection_required=True` when the answer contains real data worth cross-checking.
+        +UserPreferences user_preferences
 
----
+        +List~Dict~ pending_tool_calls
+        +int agent_loop_count
 
-### `tool_executor_node`
-**File:** `app/graph/nodes/tool_executor_node.py`
+        +List~ToolCall~ tool_history
+        +Dict persistent_results
 
-Executes all `pending_tool_calls` concurrently via `asyncio.gather`, then returns `ToolMessage` results so the model can see them on the next loop.
+        +bool reflection_required
+        +bool reflection_passed
+        +str reflection_feedback
+        +int reflection_retries
 
-Key behaviours:
-- Per-tool timeout of 15 seconds.
-- Applies inline train ranking (cheapest/fastest/best_avail) when `search_trains` or `recommend_trains` returns results.
-- Long-lived results (`get_booking_history`, `get_saved_passengers`) are written to `persistent_results` and survive across turns.
-- Populates backward-compat top-level state fields (`search_results`, `fare`, `availability`, `booking`) that the `/agent` response serialiser reads.
-- Appends a `ToolCall` record to `tool_history` for reflection and metrics.
+        +bool confirmation_required
+        +str confirmation_prompt
+        +bool confirmed
 
-**Long-lived result persistence:**
+        +List~str~ errors
+        +str pending_intent
+        +Dict collected_slots
 
-| Tool | State target | Persists? |
-|---|---|---|
-| `get_booking_history` | `persistent_results["get_booking_history"]` | Across turns (slimmed to 9 key fields) |
-| `get_saved_passengers` | `persistent_results["get_saved_passengers"]` | Across turns |
-| `search_trains`, `recommend_trains` | `search_results` (ranked inline) | Current turn only |
-| `check_availability` | `availability` | Current turn only |
-| `get_fare` | `fare` | Current turn only |
-| `book_ticket`, `cancel_ticket`, etc. | `booking` | Current turn only |
-| everything else | `tool_results[tool_name]` | Cleared next turn |
+        +ExecutionMetrics execution_metrics
 
----
+        +List search_results
+        +List ranked_results
+        +Dict selected_train
+        +Dict availability
+        +Dict fare
+        +Dict booking
+        +List passengers
+    }
 
-### `human_approval_node`
-**File:** `app/graph/nodes/human_approval_node.py`
+    class UserPreferences {
+        +str preferred_class
+        +str preferred_quota
+        +str berth_preference
+        +bool senior_citizen
+    }
 
-Pauses graph execution using LangGraph's `interrupt()`. The checkpoint is saved to MongoDB — the graph survives process restarts and resumes when the caller sends `Command(resume=<value>)`.
+    class ToolCall {
+        +str id
+        +str tool
+        +Dict args
+        +Any result
+        +str status
+        +float latency_ms
+    }
 
-Destructive tools that trigger this node:
+    class ExecutionMetrics {
+        +float turn_start_time
+        +int tools_called
+        +float total_latency_ms
+        +int llm_calls
+    }
 
-| Tool | Condition |
-|---|---|
-| `book_ticket` | Always |
-| `cancel_ticket` | Always |
-| `update_booking` | When changing `status` or `newBoardingStation` |
-| `manage_reminder` | When `action == "delete"` |
-
-Resume value normalisation: `bool` is used directly; strings like `"yes"`, `"y"`, `"confirm"`, `"ok"`, `"proceed"` resolve to `True`. Anything else resolves to `False`.
-
----
-
-### `reflection_node`
-**File:** `app/graph/nodes/reflection_node.py`
-
-Optional quality-check pass. Only runs when `reflection_required=True` and `reflection_retries < 1` (hard cap at one retry).
-
-- **Fast path (deterministic):** If any tool failed (`errors` list or `tool_history` has `status=failed`), marks `reflection_passed=False` without calling the LLM.
-- **LLM path:** Calls `reflect_on_results` function tool (`temperature=0`, `max_tokens=300`). Returns `{satisfied, feedback}`.
-- `satisfied=False` → sets `reflection_feedback` → routes back to `agent_node` for one retry with the feedback injected into the system prompt.
-- Any exception → fails open (`reflection_passed=True`) — reflection never blocks a response.
-
----
-
-## Graph state (`TravelState`)
-
-**File:** `app/graph/state.py`
-
-```
-TravelState
-├── Conversation
-│   ├── messages              List[BaseMessage]  — append-only via add_messages reducer
-│   ├── conversation_id       str
-│   └── turn_count            int
-│
-├── User Identity
-│   ├── user_email            str
-│   └── user_name             str
-│
-├── User Preferences (long-lived, persisted to MongoDB)
-│   └── user_preferences: UserPreferences
-│       ├── preferred_class, preferred_quota
-│       ├── berth_preference
-│       └── senior_citizen (bool)
-│
-├── Agent loop
-│   ├── pending_tool_calls    List[dict]   — tool calls emitted by agent_node
-│   └── agent_loop_count      int          — reset to 0 on final answer / new turn
-│
-├── Tool Execution
-│   ├── tool_history          List[ToolCall]   — accumulated this turn
-│   └── persistent_results    Dict[str, Any]   — survives across turns
-│       ├── get_booking_history  → slimmed booking list
-│       └── get_saved_passengers → passenger list
-│
-├── Reflection
-│   ├── reflection_required   bool
-│   ├── reflection_passed     bool
-│   ├── reflection_feedback   str
-│   └── reflection_retries    int
-│
-├── Human Approval
-│   ├── confirmation_required bool
-│   ├── confirmation_prompt   str
-│   └── confirmed             bool
-│
-├── Error tracking
-│   └── errors                List[str]
-│
-├── Execution Metrics
-│   └── execution_metrics: ExecutionMetrics
-│       ├── turn_start_time, tools_called
-│       ├── total_latency_ms, llm_calls
-│
-└── Backward-compat fields (read by /agent response serialiser)
-    ├── intent, travel
-    ├── search_results, ranked_results
-    ├── selected_train, availability, fare
-    ├── booking, passengers
+    TravelState --> UserPreferences
+    TravelState --> ToolCall
+    TravelState --> ExecutionMetrics
 ```
 
 ---
 
-## Memory layers
+## MCP Tool Catalogue
 
-### Conversation window (`app/memory/conversation_memory.py`)
-`format_messages()` applies a 20-message sliding window before every LLM call. Always anchors the first `HumanMessage` and trims from the middle. `ToolMessage` entries are excluded — they surface through the tool context block instead.
+The `mcp_server_irctc` exposes **19 tools** over the MCP Streamable HTTP protocol. The `ai-service` discovers them at startup and feeds their OpenAI-formatted schemas directly to the LLM every turn.
 
-### Conversation persistence (`app/services/conversation_manager.py`)
+```mermaid
+graph LR
+    subgraph PUBLIC["📖 Public Tools (read-only)"]
+        ST[search_trains]
+        CA[check_availability]
+        GF[get_fare]
+        GSM[get_seat_map]
+        GBP[get_boarding_points]
+        GLS[get_live_status]
+        GP[get_platform]
+        GTD[get_train_details]
+        GRD[get_reference_data]
+        FS[find_station]
+        RT[recommend_trains]
+    end
 
-| Method | What it does |
-|---|---|
-| `open(conversation_id, user_email)` | Load or create conversation doc; load `UserPreferences` from DB |
-| `save_turn(...)` | Upsert conversation, increment turn, persist messages and `ExecutionLogDoc`; triggers rolling summary every 10 turns |
-| `summarize(conversation_id)` | LLM-generated rolling summary (max 200 words) |
-| `build_context(conversation_id)` | Returns `{summary, messages, turn_count}` for resume flows |
-| `close(user_email, prefs)` | Persist updated `UserPreferences` back to MongoDB |
+    subgraph USER["🔐 User Tools (require auth)"]
+        BT[book_ticket 🔴]
+        CT[cancel_ticket 🔴]
+        TB[track_booking]
+        GBH[get_booking_history]
+        UB[update_booking 🔴]
+        MR[manage_reminder 🔴*]
+        ASP[add_saved_passenger 🔴]
+        GSP[get_saved_passengers]
+    end
 
-### User preferences (`app/memory/preference_memory.py`)
-Loaded at `open()`, seeded into `state["user_preferences"]`. Merged into agent context each turn. Persisted at `close()`.
+    subgraph AGENT["🤖 ai-service"]
+        MCPReg[MCP Registry]
+    end
 
-### Checkpointing (`app/memory/checkpoints.py`)
-`MongoDBSaver` (from `langgraph-checkpoint-mongodb`) backed by a sync `pymongo` client. LangGraph offloads blocking pymongo calls to a thread executor. The same `thread_id` (conversation ID) is used on every `ainvoke` call, so LangGraph automatically loads the full prior state and saves after each turn — enabling `interrupt()` / `Command(resume=...)` across process restarts.
+    MCPReg --> ST
+    MCPReg --> CA
+    MCPReg --> GF
+    MCPReg --> GSM
+    MCPReg --> GBP
+    MCPReg --> GLS
+    MCPReg --> GP
+    MCPReg --> GTD
+    MCPReg --> GRD
+    MCPReg --> FS
+    MCPReg --> RT
+    MCPReg --> BT
+    MCPReg --> CT
+    MCPReg --> TB
+    MCPReg --> GBH
+    MCPReg --> UB
+    MCPReg --> MR
+    MCPReg --> ASP
+    MCPReg --> GSP
+```
 
-### Context builder (`app/memory/context_builder.py`)
-- `build_tool_context(state)` — assembles the `[Tool Results]` block for the response node.
-- `build_planner_context(state, tools_summary)` — surfaces carried-forward booking history and saved passengers so the LLM can extract train numbers and PNRs without asking the user.
+> 🔴 = **destructive** — requires human approval via `human_approval_node` before execution.  
+> \* `manage_reminder` is only destructive when `action = "delete"`.
+
+### Typical Booking Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Agent as agent_node
+    participant Exec as tool_executor_node
+    participant Appr as human_approval_node
+    participant MCP as mcp_server_irctc
+
+    User->>Agent: "Book a ticket from Delhi to Mumbai tomorrow in 3A"
+    Agent->>Exec: find_station("Delhi"), find_station("Mumbai")
+    Exec->>MCP: find_station x2 (concurrent)
+    MCP-->>Exec: NDLS, BCT
+    Exec-->>Agent: station codes
+
+    Agent->>Exec: recommend_trains(NDLS, BCT, date, 3A)
+    Exec->>MCP: recommend_trains
+    MCP-->>Exec: ranked train list
+    Exec-->>Agent: trains (ranked by cheapest)
+
+    Agent->>User: "Here are the top trains. Which one?"
+    User->>Agent: "12951 Rajdhani"
+
+    Agent->>Exec: check_availability(12951, 3A, GN, date)
+    Exec->>MCP: check_availability
+    MCP-->>Exec: AVBL-42
+    Exec-->>Agent: available
+
+    Note over Agent: All slots collected — call book_ticket
+    Agent->>Appr: book_ticket(12951, date, NDLS, BCT, 3A, GN, passengers)
+    Note over Appr: interrupt() — graph suspends, checkpoint saved
+
+    Appr->>User: "Confirm booking Rajdhani on 2026-07-25, 3A, ₹1850? (yes/no)"
+    User->>Appr: "yes"
+    Note over Appr: Command(resume="yes") — graph resumes
+
+    Appr->>Exec: book_ticket (confirmed)
+    Exec->>MCP: book_ticket
+    MCP-->>Exec: PNR 1234567890
+    Exec-->>Agent: booking confirmed
+
+    Agent->>User: "Booked! PNR 1234567890, Rajdhani, 25 Jul, 3A."
+```
 
 ---
 
-## MCP layer
+## Memory Architecture
 
-### Transport (`app/mcp/transport.py`)
-`MCPTransport` — async HTTP client over `httpx`. Sends JSON-RPC 2.0 `POST /mcp` with per-user headers (`x-user-email`, `x-user-name`, `mcp-session-id`). Handles SSE response parsing and maps HTTP/network errors to typed MCP exceptions.
+```mermaid
+flowchart TD
+    subgraph TURN["Per-Turn (cleared each new user message)"]
+        TH[tool_history\nList of ToolCall records]
+        PTH[pending_tool_calls\nEmitted by agent_node]
+        ERR[errors\nFailed tool messages]
+        ALC[agent_loop_count\nReset to 0 on final answer]
+    end
 
-### Sessions (`app/mcp/session.py`)
-One `MCPSession` is maintained per user email. Tracks the MCP session ID, call counts, and health metrics.
+    subgraph CONV["Per-Conversation (survives turns via LangGraph checkpoint)"]
+        MSG["messages\nfull conversation history\n(add_messages reducer)"]
+        CS[collected_slots\nMid-booking slot values]
+        PI[pending_intent\ne.g. book_ticket]
+        PR["persistent_results\n├─ get_booking_history\n└─ get_saved_passengers"]
+        UP[user_preferences\npreferred class · quota · berth]
+    end
 
-### Client (`app/mcp/client.py`)
-`MCPClient` — manages per-user sessions and executes tool calls with up to 3 retries and exponential backoff (`[0.5s, 1.0s, 2.0s]`). Resets sessions automatically on `MCPSessionError`. Exposes `list_tools()` for startup discovery.
+    subgraph DB["MongoDB Collections"]
+        CHK[(langgraph_checkpoints\nMongoDBSaver)]
+        CONVD[(conversations)]
+        MSGD[(messages)]
+        PREFD[(user_preferences)]
+        EXECD[(execution_logs)]
+    end
 
-### Discovery (`app/mcp/discovery.py`)
-`MCPDiscovery.discover()` fetches `tools/list` at startup. Tools are normalised to **OpenAI function-calling format**: `{"type": "function", "function": {"name", "description", "parameters"}}`. The registry refreshes lazily if an unknown tool is called at runtime.
+    CONV -->|"ainvoke config\nthread_id = conversation_id"| CHK
+    CHK -->|"auto-load on resume\nor interrupt"| CONV
 
-### Registry (`app/mcp/registry.py`)
-`MCPToolRegistry.execute()` is the single call point from the graph:
-1. Checks `is_known(tool_name)` — triggers refresh if unknown.
-2. Strips hallucinated args not in the schema's `properties`.
-3. Validates required fields — returns an `INVALID_PARAMETERS` error without calling MCP if any are missing.
-4. Calls `MCPClient.call_tool()` and returns `json.dumps(result.to_dict())`.
+    CONVD --- MSGD
+    CONVD --- EXECD
 
-### Train ranking (`app/graph/ranking.py`)
-Pure Python, no LLM. Called inline in `tool_executor_node` after any search result arrives.
+    MSG -->|"ConversationManager\nsave_turn()"| CONVD
+    UP -->|"ConversationManager\nclose()"| PREFD
+    TH -->|"ConversationManager\nsave_turn()"| EXECD
+```
 
-| Mode | Trigger keywords | Sort key |
-|---|---|---|
-| `fastest` | fast, quick, shortest, direct | `durationMins` ascending |
-| `best_avail` | available, seats, confirm | seats descending → fare ascending |
-| `cheapest` (default) | cheap, budget, low fare (or no keyword) | fare ascending |
+### Sliding Window
+
+`conversation_memory.py` applies a **20-message sliding window** before every LLM call.  
+The first `HumanMessage` is always anchored; `ToolMessage` entries are excluded from the window (they surface via the context block in the system prompt instead).
+
+### Rolling Summary
+
+`ConversationManager.summarize()` runs an LLM call (max 200 words) every 10 turns and stores it in the `conversations` collection. It is prepended to the context for long-running conversations.
 
 ---
 
-## API reference
+## MCP Layer Internals
+
+```mermaid
+flowchart LR
+    subgraph AISERVICE["ai-service"]
+        TEN[tool_executor_node]
+        REG[MCPToolRegistry\n• validate args\n• strip hallucinated fields\n• check required fields]
+        CLI[MCPClient\n• per-user sessions\n• 3 retries\n• exp. backoff 0.5→1→2s]
+        TRANS[MCPTransport\n• httpx async\n• JSON-RPC 2.0\n• POST /mcp\n• SSE response]
+        DISC[MCPDiscovery\n• tools/list at startup\n• 5 retry attempts\n• OpenAI schema format]
+        SESS[MCPSession\n• per-user email\n• mcp-session-id header\n• health metrics]
+    end
+
+    subgraph MCPSRV["mcp_server_irctc :3001"]
+        MCP_EP["POST /mcp\n(MCP SDK StreamableHTTP)"]
+        TOOLS[19 Tool Handlers]
+        PG[(PostgreSQL\nPrisma)]
+        REDIS[(Redis\nsession cache)]
+    end
+
+    TEN --> REG --> CLI --> TRANS
+    CLI --> SESS
+    TRANS -->|"x-user-email\nx-user-name\nmcp-session-id"| MCP_EP
+    DISC -->|"tools/list\nat startup"| MCP_EP
+    MCP_EP --> TOOLS
+    TOOLS --> PG
+    TOOLS --> REDIS
+```
+
+---
+
+## Train Ranking (`app/graph/ranking.py`)
+
+Applied inline in `tool_executor_node` after every `search_trains` or `recommend_trains` response. Pure Python — no LLM involved.
+
+```mermaid
+flowchart TD
+    UT[User message text] --> DM{detect_mode}
+
+    DM -->|"fast · quick · shortest\ndirect · less time"| F["fastest\n→ sort by durationMins ASC"]
+    DM -->|"available · seats\nconfirm · confirmed"| B["best_avail\n→ sort by seats DESC\n   then fare ASC"]
+    DM -->|"cheap · budget\nlow fare · economical\n(or no keyword)"| C["cheapest (default)\n→ sort by fare ASC"]
+
+    F --> OUT[Ranked train list\nstored in ranked_results]
+    B --> OUT
+    C --> OUT
+```
+
+Fields parsed from MCP responses: `durationMins` / `duration` (string `"2h30m"` or `"2:30"`), `fare.amount` / `fare.total` / `fare.breakdown.total`, `availability.count` / `availability.available`.
+
+---
+
+## Destructive Tool Gate
+
+Six tools require explicit human confirmation. The decision is codified in `app/graph/tool_meta.py` — the **only file** in the codebase where tool names are hardcoded.
+
+```mermaid
+flowchart TD
+    AT["agent_node emits tool_call(s)"] --> ID{is_destructive?}
+
+    ID -->|"No"| TE[tool_executor_node\nruns immediately]
+    ID -->|"Yes"| HA[human_approval_node\ninterrupt → suspend graph\nsave checkpoint to MongoDB]
+
+    HA --> CP["Show confirmation prompt\ne.g. Confirm booking Rajdhani\non 2026-07-25, 3A, ₹1850?"]
+    CP --> UR{User reply}
+
+    UR -->|"yes · y · confirm\nok · proceed · sure\ngo ahead · yep · yeah"| RUN[Resume → tool_executor_node\nrun the tool]
+    UR -->|"anything else"| CAN["Resume → agent_node\ninject cancelled ToolMessages\nrelay cancellation to user"]
+
+    subgraph DT["Destructive Tools"]
+        BK["book_ticket — always"]
+        CX["cancel_ticket — always"]
+        UB["update_booking — when status\nor newBoardingStation present"]
+        MR["manage_reminder — when action='delete'"]
+        AP["add_saved_passenger — always"]
+        DP["delete_saved_passenger — always"]
+    end
+```
+
+---
+
+## Auth Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Client as Next.js Client
+    participant Auth as auth-service :4000
+    participant AI as ai-service :8000
+
+    Browser->>Client: Visit app
+    Client->>Auth: POST /auth/login {email, password}
+    Auth->>Auth: bcrypt verify password
+    Auth->>Auth: Sign JWT (HS256, shared secret)
+    Auth-->>Client: Set-Cookie: token=<jwt>  +  Redis session
+
+    Client->>AI: POST /api/v1/agent\n{message, user_email, ...}\nAuthorization: Bearer <jwt>
+    AI->>AI: verify_jwt(token, JWT_SECRET)
+    AI->>AI: extract_user_from_token()
+    AI-->>Client: Agent response
+```
+
+> The `JWT_SECRET` is shared between `auth-service` and `ai-service`. Both services must have identical values configured.
+
+---
+
+## Real-Time Streaming (Socket.IO)
+
+```mermaid
+sequenceDiagram
+    participant UI as Next.js UI
+    participant SIO as Socket.IO Manager\n(ai-service)
+    participant Graph as LangGraph Agent
+
+    UI->>SIO: connect()
+    UI->>SIO: emit("query:send", {message, conversation_id, user_email})
+    SIO->>Graph: agent_graph.ainvoke(initial_state, config)
+
+    loop Token streaming
+        Graph-->>SIO: stream event (token)
+        SIO-->>UI: emit("response:token", {content})
+    end
+
+    alt Approval required
+        Graph-->>SIO: interrupt — confirmation_prompt
+        SIO-->>UI: emit("response:confirm", {prompt})
+        UI->>SIO: emit("query:resume", {resume_value: "yes"})
+        SIO->>Graph: ainvoke(Command(resume="yes"), config)
+    end
+
+    Graph-->>SIO: final state
+    SIO-->>UI: emit("response:done", {message, search_results, booking, ...})
+```
+
+---
+
+## Startup Sequence
+
+```mermaid
+flowchart TD
+    S1["1. LangSmith\ninitialise tracing\nwrap OpenAI client"]
+    S2["2. OpenAIService\nAsyncOpenAI client\ngpt-4o-mini default"]
+    S3["3. MCPTransport + MCPClient\nhttpx async · connect()"]
+    S4["4. MCPDiscovery\ntools/list · 5 retry attempts\nnormalise to OpenAI schema"]
+    S5["5. MCPToolRegistry\nwire client + discovery cache"]
+    S6["6. MongoDB\nMotor async client\nsetup indexes: conversations\npreferences · executions"]
+    S7["7. MongoDBSaver\nLangGraph checkpoint store\npymongo sync (thread executor)"]
+    S8["8. create_agent_graph()\nStateGraph compile\ncheckpointer wired"]
+    S9["9. ConversationManager\nDB + LLM service"]
+    S10["10. Socket.IO Manager\nwire agent graph\n+ conversation manager"]
+
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10
+    S10 --> READY["✅ Application ready\nFastAPI + Socket.IO ASGI"]
+```
+
+---
+
+## Database Models
+
+```mermaid
+erDiagram
+    ConversationDoc {
+        string conversation_id PK
+        string user_email
+        string user_name
+        string title
+        string summary
+        int    turn_count
+        datetime created_at
+        datetime updated_at
+    }
+
+    MessageDoc {
+        string conversation_id FK
+        string role
+        string content
+        string intent
+        datetime created_at
+    }
+
+    UserPreferenceDoc {
+        string user_email PK
+        string preferred_class
+        string preferred_quota
+        string berth_preference
+        bool   senior_citizen
+        datetime updated_at
+    }
+
+    ExecutionLogDoc {
+        string conversation_id FK
+        int    turn
+        string intent
+        string user_goal
+        list   tool_history
+        list   errors
+        float  total_latency_ms
+        int    llm_calls
+        int    tools_called
+        datetime created_at
+    }
+
+    ConversationDoc ||--o{ MessageDoc : "has messages"
+    ConversationDoc ||--o{ ExecutionLogDoc : "has execution logs"
+    UserPreferenceDoc ||--o| ConversationDoc : "loaded at open()"
+```
+
+> MongoDB collections: `conversations`, `messages`, `user_preferences`, `execution_logs`, `langgraph_checkpoints` (LangGraph-managed).
+
+---
+
+## API Reference
 
 Base path: `/api/v1`
 
 ### Health
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness probe — returns `{status, environment}` |
+| Method | Path      | Description                                      |
+| ------ | --------- | ------------------------------------------------ |
+| `GET`  | `/health` | Liveness probe — returns `{status, environment}` |
 
 ### Chat
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/chat` | Non-streaming LLM completion. Returns `ChatResponse`. |
-| `POST` | `/chat/stream` | Token-by-token SSE stream. Emits `{"content": token}` chunks and a final `{"done": true}`. |
-| `POST` | `/agent` | Run the full LangGraph agent. Returns the structured agent response (see below). |
+| Method | Path           | Description                                                              |
+| ------ | -------------- | ------------------------------------------------------------------------ |
+| `POST` | `/chat`        | Non-streaming LLM completion via `ChatService`                           |
+| `POST` | `/chat/stream` | Token-by-token SSE stream, emits `{"content": token}` + `{"done": true}` |
+| `POST` | `/agent`       | Run the full LangGraph agent (see below)                                 |
 
-**`POST /agent` request body (`AgentRequest`):**
+**`POST /agent` — Request**
 
 ```json
 {
-  "message": "Find trains from Delhi to Mumbai tomorrow",
-  "conversation_id": "conv_abc123",
-  "user_email": "user@example.com",
-  "user_name": "Alice",
-  "resume": false,
-  "resume_value": null,
-  "search_results": null,
-  "selected_train": null,
-  "availability": null,
-  "fare": null,
-  "passengers": null,
-  "booking": null
+    "message": "Find trains from Delhi to Mumbai tomorrow",
+    "conversation_id": "conv_abc123",
+    "user_email": "user@example.com",
+    "user_name": "Alice",
+    "resume": false,
+    "resume_value": null,
+    "search_results": null,
+    "selected_train": null,
+    "availability": null,
+    "fare": null,
+    "passengers": null,
+    "booking": null
 }
 ```
 
-Set `"resume": true` with `"resume_value": "yes"` (or `false`) to resume a graph interrupted at a human approval gate.
+Send `"resume": true` with `"resume_value": "yes"` (or `"no"`) to resume a graph suspended at a human approval gate.
 
-**`POST /agent` response:**
+**`POST /agent` — Response**
 
 ```json
 {
-  "message": "Here are the trains I found...",
-  "intent": "search_trains",
-  "travel_context": { "from_station": "NDLS", "to_station": "BCT", "date": "2026-07-24" },
-  "search_results": [...],
-  "selected_train": null,
-  "availability": null,
-  "fare": null,
-  "booking": null,
+  "message":             "Here are trains on that route…",
+  "intent":              "search_trains",
+  "travel_context":      { "from_station": "NDLS", "to_station": "BCT", "date": "2026-07-25" },
+  "search_results":      [...],
+  "selected_train":      null,
+  "availability":        null,
+  "fare":                null,
+  "booking":             null,
   "confirmation_required": false,
   "confirmation_prompt": null,
-  "interrupted": false,
-  "errors": []
+  "interrupted":         false,
+  "errors":              []
 }
 ```
 
-When `"interrupted": true`, the graph is paused. Re-send with `"resume": true` and the user's confirmation string.
+When `"interrupted": true`, the graph is paused at a human approval gate. Re-send with `"resume": true`.
 
 ### Conversations
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/conversations/{conversation_id}/messages` | Fetch message history (default limit: 50) |
-| `GET` | `/conversations/{conversation_id}/context` | Fetch summary + recent messages for resume flows |
-| `GET` | `/conversations/user/{user_email}` | List recent conversations for a user (default limit: 20) |
-| `POST` | `/conversations/{conversation_id}/summarize` | Manually trigger a rolling LLM summary |
+| Method | Path                            | Description                               |
+| ------ | ------------------------------- | ----------------------------------------- |
+| `GET`  | `/conversations/{id}/messages`  | Message history (default limit: 50)       |
+| `GET`  | `/conversations/{id}/context`   | Summary + recent messages for resume      |
+| `GET`  | `/conversations/user/{email}`   | List conversations for a user (limit: 20) |
+| `POST` | `/conversations/{id}/summarize` | Trigger rolling LLM summary               |
 
-### Real-time (Socket.IO)
+### Socket.IO Events
 
-Mounted at the ASGI root alongside FastAPI. Clients connect and emit `query:send` (new message) or `query:resume` (confirmation response). The server streams back tokens and final structured results.
+| Direction       | Event              | Payload                                             |
+| --------------- | ------------------ | --------------------------------------------------- |
+| Client → Server | `query:send`       | `{message, conversation_id, user_email, user_name}` |
+| Client → Server | `query:resume`     | `{conversation_id, resume_value}`                   |
+| Server → Client | `response:token`   | `{content: "<token>"}`                              |
+| Server → Client | `response:confirm` | `{prompt: "<confirmation question>"}`               |
+| Server → Client | `response:done`    | Full structured agent response                      |
+| Server → Client | `response:error`   | `{error: "<message>"}`                              |
 
 ---
 
-## Auth
+## Error Handling
 
-JWT verification is shared with the auth-service. The `JWT_SECRET` and `JWT_ALGORITHM` settings must match. Tokens are read from the `Authorization: Bearer` header or a cookie.
+| Exception                     | HTTP Status | Trigger                           |
+| ----------------------------- | ----------- | --------------------------------- |
+| `ValidationException`         | 400         | Malformed request                 |
+| `AuthenticationException`     | 401         | Invalid OpenAI API key            |
+| `RateLimitException`          | 429         | OpenAI rate limit                 |
+| `ModelProviderException`      | 502         | Generic OpenAI API error          |
+| `ServiceUnavailableException` | 503         | Connection timeout, quota/billing |
+
+Raw SDK messages and stack traces are never forwarded to clients.
 
 ---
 
-## Error handling
+## Project Structure
 
-**Exception hierarchy** (`app/core/exceptions.py`):
+```
+irctc_agent2/
+├── client/                         # Next.js 16 chat UI
+│   ├── app/                        # App Router pages
+│   ├── components/                 # React components
+│   ├── store/                      # Redux Toolkit slices
+│   ├── hooks/                      # Custom React hooks
+│   └── lib/                        # API clients, socket setup
+│
+├── ai-service/                     # FastAPI + LangGraph orchestration
+│   └── app/
+│       ├── api/                    # HTTP routes (chat, agent, conversations)
+│       ├── auth/                   # JWT verification, CurrentUser
+│       ├── config/                 # Pydantic settings, constants
+│       ├── core/                   # Exceptions, handlers, lifespan
+│       ├── db/                     # MongoDB models + repositories
+│       ├── graph/
+│       │   ├── builder.py          # StateGraph compilation
+│       │   ├── edges.py            # Conditional routing functions
+│       │   ├── ranking.py          # Deterministic train ranking
+│       │   ├── state.py            # TravelState TypedDict
+│       │   ├── tool_meta.py        # DESTRUCTIVE_TOOLS registry
+│       │   └── nodes/
+│       │       ├── agent_node.py            # LLM decision node
+│       │       ├── tool_executor_node.py    # Concurrent MCP execution
+│       │       ├── human_approval_node.py   # Interrupt/approval gate
+│       │       └── reflection_node.py       # Quality-check pass
+│       ├── mcp/                    # Transport, client, discovery, registry
+│       ├── memory/                 # Checkpoints, context builder, preferences
+│       ├── services/               # ChatService, ConversationManager, OpenAIService
+│       ├── telemetry/              # Loguru logging
+│       ├── websocket/              # Socket.IO event handlers
+│       └── main.py                 # ASGI entry point
+│
+├── services/
+│   ├── auth-service/               # Express 5 + Prisma + PostgreSQL + Redis
+│   │   ├── src/
+│   │   │   ├── controllers/
+│   │   │   ├── services/
+│   │   │   ├── repositories/
+│   │   │   ├── middleware/
+│   │   │   ├── routes/
+│   │   │   └── utils/
+│   │   └── prisma/
+│   │
+│   └── mcp_server_irctc/           # MCP SDK + 19 IRCTC tools
+│       ├── src/
+│       │   ├── tools/              # 19 MCP tool handlers
+│       │   ├── services/
+│       │   ├── repositories/
+│       │   ├── types/
+│       │   └── utils/
+│       └── prisma/
+```
 
-| Exception | HTTP status | When raised |
-|---|---|---|
-| `ValidationException` | 400 | Malformed request (non-billing) |
-| `AuthenticationException` | 401 | OpenAI API key invalid |
-| `RateLimitException` | 429 | OpenAI rate limit hit |
-| `ModelProviderException` | 502 | Generic OpenAI API error |
-| `ServiceUnavailableException` | 503 | Connection error, timeout, or quota/billing issue |
+---
 
-All exceptions are sanitised — raw SDK messages, stack traces, and account info never reach clients.
+## Tech Stack
+
+```mermaid
+mindmap
+  root((IRCTC AI Agent))
+    Client
+      Next.js 16
+      React 19
+      Redux Toolkit
+      Socket.IO Client
+      Tailwind CSS 4
+      TypeScript 5
+    ai-service
+      FastAPI 0.115+
+      LangGraph 1.2.9+
+      LangChain Core 1.5+
+      OpenAI SDK 1.12+
+      LangSmith 0.2+
+      MongoDB Motor 3.6+
+      pymongo 4.7+
+      python-socketio 5.11+
+      httpx 0.27+
+      PyJWT 2.9+
+      pydantic-settings 2.7+
+      Loguru 0.7+
+    auth-service
+      Express 5
+      Prisma 7 ORM
+      PostgreSQL
+      Redis ioredis
+      bcrypt
+      jsonwebtoken
+      TypeScript 7
+    mcp-server
+      MCP SDK 1.29+
+      Express 5
+      Prisma 7 ORM
+      PostgreSQL
+      Redis ioredis
+      TypeScript 5
+      Zod 4
+```
+
+---
+
+## Local Development
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 20+
+- MongoDB (local or `MONGO_URL` env)
+- PostgreSQL (for auth-service and mcp_server_irctc)
+- Redis (for auth-service and mcp_server_irctc)
+
+### 1 — MCP Server
+
+```bash
+cd services/mcp_server_irctc
+cp .env.example .env        # fill DATABASE_URL, REDIS_URL
+npm install
+npm run db:setup            # generate + migrate + seed
+npm run dev                 # :3001
+```
+
+### 2 — Auth Service
+
+```bash
+cd services/auth-service
+cp .env.example .env        # fill DATABASE_URL, REDIS_URL, JWT_SECRET
+npm install
+npm run db:setup
+npm run dev                 # :4000
+```
+
+### 3 — AI Service
+
+```bash
+cd ai-service
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+cp .env.example .env
+# Required: OPENAI_API_KEY (sk-...), JWT_SECRET (match auth-service)
+# Optional: MCP_SERVER_URL, MONGO_URL, LANGSMITH_API_KEY
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Interactive API docs: `http://localhost:8000/docs` (disabled in `production` env).
+
+### 4 — Client
+
+```bash
+cd client
+cp .env.example .env        # fill NEXT_PUBLIC_AI_SERVICE_URL
+npm install
+npm run dev                 # :3000
+```
 
 ---
 
 ## Configuration
 
-All settings in `app/config/settings.py` via `pydantic-settings`. Copy `.env.example` to `.env` and fill in the required values.
+### ai-service (`ai-service/.env`)
 
-| Variable | Default | Required | Description |
-|---|---|---|---|
-| `OPENAI_API_KEY` | — | **Yes** | Must start with `sk-` |
-| `OPENAI_DEFAULT_MODEL` | `gpt-4o-mini` | No | OpenAI model name |
-| `APP_NAME` | `ai-service` | No | Application name |
-| `APP_ENV` | `development` | No | `development` / `production` |
-| `DEBUG` | `false` | No | Enables uvicorn reload and API docs |
-| `LOG_LEVEL` | `INFO` | No | Loguru log level |
-| `MCP_SERVER_URL` | `http://localhost:3000` | No | IRCTC MCP server base URL |
-| `MCP_SERVER_TIMEOUT` | `30.0` | No | Per-request MCP timeout in seconds |
-| `MONGO_URL` | `mongodb://localhost:27017` | No | MongoDB connection string |
-| `MONGO_DB` | `irctc_ai` | No | MongoDB database name |
-| `JWT_SECRET` | `change-me` | **Yes** | Shared secret with auth-service |
-| `JWT_ALGORITHM` | `HS256` | No | JWT signing algorithm |
-| `LANGSMITH_TRACING` | `false` | No | Enable LangSmith tracing |
-| `LANGSMITH_API_KEY` | — | No | Required if tracing is enabled |
-| `LANGSMITH_PROJECT` | `default` | No | LangSmith project name |
-| `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | No | LangSmith endpoint |
+| Variable               | Default                     | Required | Description                   |
+| ---------------------- | --------------------------- | -------- | ----------------------------- |
+| `OPENAI_API_KEY`       | —                           | **Yes**  | Must start with `sk-`         |
+| `OPENAI_DEFAULT_MODEL` | `gpt-4o-mini`               | No       | OpenAI model                  |
+| `JWT_SECRET`           | `change-me`                 | **Yes**  | Shared with auth-service      |
+| `JWT_ALGORITHM`        | `HS256`                     | No       | JWT algorithm                 |
+| `MCP_SERVER_URL`       | `http://localhost:3001`     | No       | MCP server base URL           |
+| `MCP_SERVER_TIMEOUT`   | `30.0`                      | No       | Per-request timeout (seconds) |
+| `MONGO_URL`            | `mongodb://localhost:27017` | No       | MongoDB connection string     |
+| `MONGO_DB`             | `irctc_ai`                  | No       | Database name                 |
+| `APP_ENV`              | `development`               | No       | `development` / `production`  |
+| `DEBUG`                | `false`                     | No       | Enables hot reload + API docs |
+| `LOG_LEVEL`            | `INFO`                      | No       | Loguru level                  |
+| `LANGSMITH_TRACING`    | `false`                     | No       | Enable LangSmith tracing      |
+| `LANGSMITH_API_KEY`    | —                           | No       | Required if tracing enabled   |
+| `LANGSMITH_PROJECT`    | `default`                   | No       | LangSmith project name        |
 
-> **Note:** A warning is emitted at startup if `JWT_SECRET` is still set to `"change-me"`.
+### Docker
 
----
-
-## Local development
-
-### Prerequisites
-
-- Python 3.11+
-- MongoDB running locally (or update `MONGO_URL`)
-- IRCTC MCP server running at `MCP_SERVER_URL`
-
-### Setup
+Each service ships a `Dockerfile`. The MCP server also has a `docker-compose.yml` for running with PostgreSQL and Redis together.
 
 ```bash
-# Clone and enter the service directory
-cd ai-service
-
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install the package in editable mode (all dependencies)
-pip install -e .
-
-# Copy and fill in environment variables
-cp .env.example .env
-# Edit .env — set OPENAI_API_KEY and JWT_SECRET at minimum
-```
-
-### Run
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Interactive API docs available at `http://localhost:8000/docs` (disabled in `production` env).
-
----
-
-## Docker
-
-```bash
-# Build
-docker build -t ai-service .
-
-# Run
-docker run --env-file .env -p 8000:8000 ai-service
-```
-
-The `Dockerfile` uses `python:3.11-slim`, exposes port `8000`, and runs:
-```
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# ai-service
+docker build -t ai-service ./ai-service
+docker run --env-file ai-service/.env -p 8000:8000 ai-service
 ```
 
 ---
 
-## Startup sequence
+## Key Design Decisions
 
-On application startup (`app/core/lifespan.py`):
+**Single decision node** — `agent_node` replaces what used to be separate intent, slot-filler, planner, and response nodes. The LLM reads live MCP tool schemas every turn and decides entirely on its own what to call. This means adding a new read-only MCP tool requires zero changes to the Python code.
 
-1. **LangSmith** — initialised if `LANGSMITH_TRACING=true` and API key is set; `wrap_openai` applied to the OpenAI client.
-2. **OpenAIService** — `AsyncOpenAI` client wrapped and stored on `app.state`.
-3. **MCP transport & client** — `MCPTransport` connects; `MCPClient` wraps it.
-4. **MCP discovery** — `MCPDiscovery.discover()` called with 5 retry attempts; warns and continues if the MCP server is not yet available (lazy refresh kicks in at runtime).
-5. **MCP registry** — `MCPToolRegistry` wired with the client and discovery cache.
-6. **MongoDB** — Motor async client created; collection indexes set up (`conversations`, `preferences`, `executions`).
-7. **Checkpointer** — `MongoDBSaver` initialised for LangGraph state persistence.
-8. **Agent graph** — `create_agent_graph()` compiles the `StateGraph` with the checkpointer.
-9. **ConversationManager** — wired with the DB and LLM service.
-10. **Socket.IO manager** — `_make_manager()` wired with the agent graph and conversation manager.
+**Intent gate in the system prompt** — the prompt includes an explicit `INTENT GATE` section with labelled examples of what phrases should and should not trigger mutating tools. This prevents the model from pre-emptively booking or saving passengers when the user is just browsing.
 
-On shutdown: LangSmith traces are flushed, MCP client disconnects, MongoDB clients close cleanly.
+**Slot-filling in state** — `pending_intent` and `collected_slots` survive in the LangGraph checkpoint across turns. When the user answers a follow-up question ("Kevin, 22, MALE"), `agent_node` re-reads those fields and continues from where it left off rather than starting over.
 
----
+**Human approval via LangGraph interrupt** — destructive calls do not go through a custom gate node that polls a flag. They use `interrupt()`, which suspends the graph execution, serialises the full state to MongoDB, and returns control to the HTTP handler. The graph resumes on the next HTTP request with `Command(resume=value)`. This means the approval is durable across process restarts.
 
-## Project structure
+**Deterministic ranking** — train ranking happens in pure Python inside `tool_executor_node`, never by asking the LLM to sort. This keeps results consistent and avoids burning tokens on ordering.
 
-```
-ai-service/
-├── app/
-│   ├── api/
-│   │   ├── chat.py              # POST /chat, /chat/stream, /agent
-│   │   ├── conversations.py     # GET/POST /conversations/*
-│   │   ├── health.py            # GET /health
-│   │   ├── routes.py            # Router aggregator
-│   │   └── dependencies.py      # FastAPI dependency providers
-│   ├── auth/
-│   │   ├── jwt.py               # JWT verification
-│   │   └── current_user.py      # CurrentUser dataclass
-│   ├── config/
-│   │   ├── settings.py          # Pydantic settings (env var binding)
-│   │   └── constants.py
-│   ├── core/
-│   │   ├── exceptions.py        # BaseAPIException hierarchy
-│   │   ├── handlers.py          # Global FastAPI exception handlers
-│   │   └── lifespan.py          # Startup / shutdown lifecycle
-│   ├── db/
-│   │   ├── models.py            # MongoDB document models
-│   │   ├── mongo.py             # Motor client factory
-│   │   └── repositories/
-│   │       ├── conversation_repo.py
-│   │       ├── execution_repo.py
-│   │       └── preference_repo.py
-│   ├── graph/
-│   │   ├── builder.py           # create_agent_graph()
-│   │   ├── edges.py             # Conditional routing functions
-│   │   ├── ranking.py           # Deterministic train ranking
-│   │   ├── state.py             # TravelState TypedDict
-│   │   ├── tool_meta.py         # DESTRUCTIVE_TOOLS registry + prompt builders
-│   │   └── nodes/
-│   │       ├── agent_node.py         # LLM decision node
-│   │       ├── tool_executor_node.py # Concurrent MCP tool execution
-│   │       ├── human_approval_node.py# LangGraph interrupt gate
-│   │       └── reflection_node.py    # Quality-check pass
-│   ├── mcp/
-│   │   ├── client.py            # MCPClient (retry, per-user sessions)
-│   │   ├── discovery.py         # Tool schema discovery
-│   │   ├── exceptions.py        # MCP error hierarchy
-│   │   ├── normalizer.py        # ToolResult + response normalisation
-│   │   ├── registry.py          # MCPToolRegistry (validate + execute)
-│   │   ├── session.py           # Per-user MCPSession
-│   │   └── transport.py         # HTTP POST /mcp over httpx
-│   ├── memory/
-│   │   ├── checkpoints.py       # MongoDBSaver factory
-│   │   ├── context_builder.py   # Tool result / planner context assembly
-│   │   ├── conversation_memory.py # 20-msg sliding window
-│   │   └── preference_memory.py # User preference load/persist/merge
-│   ├── services/
-│   │   ├── chat.py              # ChatService (non-agent completions)
-│   │   ├── conversation_manager.py # Turn persistence + summarisation
-│   │   └── openai_service.py    # OpenAIService wrapper
-│   ├── telemetry/
-│   │   └── logging.py           # Loguru setup
-│   ├── websocket/
-│   │   └── manager.py           # Socket.IO event handlers
-│   └── main.py                  # FastAPI + Socket.IO ASGI app entry point
-├── .env.example
-├── Dockerfile
-└── pyproject.toml
-```
+**Persistent results** — `get_booking_history` and `get_saved_passengers` are cached in `persistent_results` and injected into the system prompt context block. The LLM is explicitly told not to call these tools again unless the user asks to refresh. This cuts round-trips on common follow-up questions.
+
+**Reflection hard cap** — the reflection node is gated on `reflection_retries < 1`. At most one LLM quality-check call and one retry happen per turn. Reflection failures are always open — if the checker itself throws, `reflection_passed = True` so the original answer is returned.
 
 ---
 
-## Dependencies
+## MCP Reference Values
 
-Full list in `pyproject.toml`. Key packages:
+| Class | Name                | Quota | Name            |
+| ----- | ------------------- | ----- | --------------- |
+| `SL`  | Sleeper             | `GN`  | General         |
+| `3A`  | AC 3 Tier           | `LD`  | Ladies          |
+| `2A`  | AC 2 Tier           | `TQ`  | Tatkal          |
+| `1A`  | AC First Class      | `PT`  | Premium Tatkal  |
+| `CC`  | AC Chair Car        | `HO`  | Higher Official |
+| `EC`  | Executive Chair Car | `SS`  | Senior Citizen  |
+| `2S`  | Second Sitting      |       |                 |
+| `VS`  | Vistadome AC        |       |                 |
 
-| Package | Version | Purpose |
-|---|---|---|
-| `fastapi` | ≥0.115.0 | HTTP framework |
-| `uvicorn[standard]` | ≥0.34.0 | ASGI server |
-| `langgraph` | ≥1.2.9 | Agent graph orchestration |
-| `langchain-core` | ≥1.5.0 | Message types, base abstractions |
-| `langgraph-checkpoint-mongodb` | ≥0.4.0 | MongoDB-backed LangGraph checkpointer |
-| `openai` | ≥1.12.0 | OpenAI Python SDK |
-| `langsmith` | ≥0.2.0 | LLM tracing |
-| `motor` | ≥3.6.0 | Async MongoDB driver |
-| `pymongo` | ≥4.7.0 | Sync MongoDB driver (checkpointer) |
-| `python-socketio[asyncio-client]` | ≥5.11.0 | Socket.IO server |
-| `httpx` | ≥0.27.0 | Async HTTP (MCP transport) |
-| `PyJWT` | ≥2.9.0 | JWT verification |
-| `pydantic-settings` | ≥2.7.0 | Env var configuration |
-| `loguru` | ≥0.7.3 | Structured logging |
+**Berth preferences:** `LB` Lower · `MB` Middle · `UB` Upper · `SL` Side Lower · `SUB` Side Upper · `WS` Window Seat
+
+**Booking statuses:** `PENDING` · `BOOKED` · `RAC` · `WL` · `CANCELLED` · `FAILED`
+
+**Reminder types:** `JOURNEY` · `PNR` · `BOOKING`
+
+---
